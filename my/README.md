@@ -69,6 +69,10 @@ python -m my.gradio_gen
 
 生成履歴の一覧表示・検索・編集ができるUI。
 
+**簡単起動:** `my/run_history.sh` を実行 → サーバー起動後にブラウザが自動で開きます。
+
+コマンドラインから起動する場合:
+
 ```bash
 # リポジトリルートで実行
 streamlit run my/streamlit_history.py
