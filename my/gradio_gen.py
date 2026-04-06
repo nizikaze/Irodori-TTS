@@ -527,6 +527,7 @@ def main() -> None:
         server_port=args.server_port,
         share=bool(args.share),
         debug=bool(args.debug),
+        inbrowser=True,
     )
 
 
