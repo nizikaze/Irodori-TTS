@@ -2,11 +2,11 @@
 
 ## Phase 1: 基盤（DB）
 
-- [ ] `my/data/` ディレクトリを作成
-- [ ] `my/db.py` を実装
-  - [ ] DBファイル初期化・テーブル作成（`init_db()`）
-  - [ ] generation の INSERT（`insert_generation()`）
-  - [ ] generation の SELECT（全件・フィルター付き）
+- [x] `my/data/` ディレクトリを作成
+- [x] `my/db.py` を実装
+  - [x] DBファイル初期化・テーブル作成（`init_db()`）
+  - [x] generation の INSERT（`insert_generation()`）
+  - [x] generation の SELECT（全件・フィルター付き）
 
 ## Phase 2: 生成UI（Gradio）
 
