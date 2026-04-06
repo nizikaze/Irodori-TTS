@@ -78,7 +78,7 @@ python -m my.gradio_gen
 streamlit run my/streamlit_history.py
 ```
 
-起動後、ブラウザで `http://localhost:8501` にアクセスしてください。
+起動後、ブラウザで `http://localhost:8502` にアクセスしてください。
 
 #### 主な機能
 
