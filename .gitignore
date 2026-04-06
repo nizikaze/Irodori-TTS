@@ -215,5 +215,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+outputs/
 gradio_outputs/
 gradio_outputs_voicedesign/
