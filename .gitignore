@@ -218,3 +218,11 @@ __marimo__/
 outputs/
 gradio_outputs/
 gradio_outputs_voicedesign/
+
+# Git worktree 作業ディレクトリ
+worktrees/
+
+# SQLite DBファイル（環境ごとに生成されるためバージョン管理しない）
+my/data/*.db
+my/data/*.db-wal
+my/data/*.db-shm
