@@ -14,12 +14,27 @@ Why Streamlit:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# --------------------------------------------------------------------------- #
+#  sys.path にプロジェクトルートを追加
+#
+#  Why: Streamlitのスクリプトランナーはスクリプトのあるディレクトリ（my/）を
+#       sys.path に追加するが、プロジェクトルートは追加しない。
+#       そのため「from my.db import ...」のように my パッケージを参照する
+#       インポートが ModuleNotFoundError になる。
+#       このファイル（my/streamlit_history.py）の親の親 = プロジェクトルート を
+#       sys.path の先頭に追加することで解決する。
+#       PYTHONPATH 環境変数に頼る方法は Windows(MINGW64) 環境で不安定なため、
+#       Python 内で直接 sys.path を操作する。
+# --------------------------------------------------------------------------- #
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import streamlit as st
 
-# my/ 配下のモジュールをインポートするため、プロジェクトルートからの相対パスで指定
-# streamlit run my/streamlit_history.py で起動する想定
 from my.db import init_db, select_generations, update_generation
 
 # --------------------------------------------------------------------------- #
