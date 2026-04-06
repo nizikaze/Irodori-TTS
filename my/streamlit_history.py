@@ -389,6 +389,19 @@ for row in rows:
 
             # 保存ボタン
             # ボタン押下時にDB更新し、画面をリロードして反映する
+            #
+            # Why tryの外でrerun:
+            #   st.rerun() は内部的に RerunException という特殊な例外をraiseして
+            #   スクリプト実行を中断→再実行する仕組みになっている。
+            #   try ブロック内で st.rerun() を呼ぶと、この RerunException が
+            #   except 節に捕捉されたり、Streamlit側でエラー表示されてしまう。
+            #   そのため、DB更新は try 内で行い、rerun は try の外で呼ぶ。
+            #
+            # Why session_state で成功メッセージを管理:
+            #   st.rerun() を呼ぶとスクリプトが先頭から再実行されるため、
+            #   rerun 前に st.success() を表示しても即座に消えてしまう。
+            #   session_state にフラグを保存し、再実行後にメッセージを表示する。
+            save_succeeded = False
             if st.button("💾 保存", key=f"save_{gen_id}"):
                 try:
                     update_generation(
@@ -397,13 +410,21 @@ for row in rows:
                         rating=new_rating,
                         note=new_note if new_note else None,
                     )
-                    st.success("保存しました！")
-                    # st.rerun() で画面を再描画し、更新内容を反映する
-                    # Why rerun: Streamlitは上から下に1回実行するモデルのため、
-                    # DB更新後に表示を最新化するには再実行が必要
-                    st.rerun()
+                    save_succeeded = True
                 except ValueError as e:
                     st.error(f"保存に失敗しました: {e}")
+
+            # rerun は try の外で呼ぶ（RerunException が except に捕捉されるのを防ぐ）
+            if save_succeeded:
+                # session_state に保存成功のメッセージを記録
+                st.session_state[f"save_msg_{gen_id}"] = "保存しました！"
+                st.rerun()
+
+            # 前回の保存成功メッセージがあれば表示し、表示後にクリアする
+            _save_msg_key = f"save_msg_{gen_id}"
+            if _save_msg_key in st.session_state:
+                st.success(st.session_state[_save_msg_key])
+                del st.session_state[_save_msg_key]
 
         # カード終了タグ
         st.markdown("</div>", unsafe_allow_html=True)
