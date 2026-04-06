@@ -275,6 +275,86 @@ def select_generations(
 
 
 # --------------------------------------------------------------------------- #
+#  特定IDの generation を更新する（お気に入り・レーティング・メモ）
+# --------------------------------------------------------------------------- #
+
+# _SENTINEL: 「引数が指定されなかった」ことを判別するための特別な値。
+# None を「値をクリアする（NULLにする）」意味で使いたいため、
+# デフォルト値として None は使えない。そこで別のオブジェクトで区別する。
+_SENTINEL = object()
+
+
+def update_generation(
+    generation_id: int,
+    *,
+    favorite: int | object = _SENTINEL,
+    rating: int | None | object = _SENTINEL,
+    note: str | None | object = _SENTINEL,
+    db_path: Path | str | None = None,
+) -> None:
+    """
+    指定IDの生成レコードを部分更新する。
+
+    閲覧UI（Streamlit）での編集操作時に呼び出される想定。
+    指定されたフィールドのみUPDATEし、指定されなかったフィールドは変更しない。
+
+    _SENTINEL という特別な値で「引数が渡されなかった」ことを判別している。
+    これは、None を「値をクリアする（NULL にリセットする）」意味で使いたいため。
+    例: rating=None → レーティングを未評価に戻す
+
+    Args:
+        generation_id: 更新対象の行ID（必須）
+        favorite:      お気に入りフラグ（0=なし, 1=あり）
+        rating:        レーティング（1〜5）。None で未評価にリセット。
+        note:          ユーザーメモ。None でクリア。
+        db_path:       DBファイルのパス。None の場合はデフォルト。
+
+    Raises:
+        ValueError: 更新対象のフィールドが1つも指定されなかった場合
+        ValueError: 指定IDのレコードが存在しない場合
+    """
+    # 更新対象のカラムと値を動的に組み立てる
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if favorite is not _SENTINEL:
+        updates.append("favorite = ?")
+        params.append(favorite)
+
+    if rating is not _SENTINEL:
+        updates.append("rating = ?")
+        params.append(rating)
+
+    if note is not _SENTINEL:
+        updates.append("note = ?")
+        params.append(note)
+
+    if not updates:
+        raise ValueError(
+            "update_generation() には少なくとも1つの更新フィールド"
+            "（favorite, rating, note）を指定してください。"
+        )
+
+    # WHERE句のパラメータ（IDで絞り込み）
+    params.append(generation_id)
+
+    sql = f"UPDATE generations SET {', '.join(updates)} WHERE id = ?"
+
+    conn = _get_connection(db_path)
+    try:
+        cursor = conn.execute(sql, params)
+        conn.commit()
+        # rowcount: UPDATEで影響を受けた行数。0の場合はIDが存在しない
+        if cursor.rowcount == 0:
+            raise ValueError(
+                f"ID={generation_id} のレコードが見つかりません。"
+                "すでに削除されている可能性があります。"
+            )
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
 #  動作確認用: python -m my.db で初期化テスト
 # --------------------------------------------------------------------------- #
 
