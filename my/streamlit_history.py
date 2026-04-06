@@ -37,6 +37,28 @@ import streamlit as st
 
 from my.db import init_db, select_generations, update_generation
 
+
+# --------------------------------------------------------------------------- #
+#  Streamlit バージョン互換ヘルパー
+# --------------------------------------------------------------------------- #
+
+
+def _safe_rerun() -> None:
+    """
+    Streamlitのバージョンに応じて画面を再実行（rerun）する。
+
+    Why:
+        st.rerun() は Streamlit 1.27.0 で追加された正式 API。
+        それ以前のバージョン（例: 1.22.0）では st.experimental_rerun() を
+        使う必要がある。どちらのバージョンでも動作するよう、
+        hasattr で分岐して呼び分ける。
+    """
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        # Streamlit < 1.27.0 用のフォールバック
+        st.experimental_rerun()  # type: ignore[attr-defined]
+
 # --------------------------------------------------------------------------- #
 #  定数
 # --------------------------------------------------------------------------- #
@@ -418,7 +440,7 @@ for row in rows:
             if save_succeeded:
                 # session_state に保存成功のメッセージを記録
                 st.session_state[f"save_msg_{gen_id}"] = "保存しました！"
-                st.rerun()
+                _safe_rerun()
 
             # 前回の保存成功メッセージがあれば表示し、表示後にクリアする
             _save_msg_key = f"save_msg_{gen_id}"
