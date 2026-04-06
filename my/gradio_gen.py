@@ -58,6 +58,9 @@ from my.db import init_db, insert_generation
 # 直近履歴の最大表示件数
 _MAX_HISTORY = 5
 
+# グローバルな停止フラグ管理用（session_hash -> 停止要求）
+_session_stop_flags: dict[str, bool] = {}
+
 # 生成した wav を保存するディレクトリ
 _OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "outputs"
 
@@ -88,6 +91,7 @@ def _run_generation(
     autoplay: bool,
     forever: bool,
     history_paths: list[str],
+    request: gr.Request = None,
 ) -> Generator[tuple, None, None]:
     """
     音声を1件生成し、履歴・DB を更新する。
@@ -102,6 +106,7 @@ def _run_generation(
         autoplay:      最新音声を自動再生するかどうか
         forever:       連続生成モードかどうか
         history_paths: 直近5件の wav パスリスト（gr.State から受け取る）
+        request:       Gradio のリクエスト情報（セッション管理用）
 
     Yields:
         tuple: (Audio×5 の更新, ログ文字列, タイミング文字列, 更新後の history_paths)
@@ -141,11 +146,20 @@ def _run_generation(
     # DB を初期化（テーブルが無ければ作る）
     init_db()
 
+    # セッションIDを取得・フラグをリセット
+    session_id = request.session_hash if request else "default"
+    _session_stop_flags[session_id] = False
+
     # --- 生成ループ（forever=False なら1回で終了） ---
     # Why: while True + break で「最低1回は実行」を保証しつつ、
     #      forever フラグで連続生成に対応する
     iteration = 0
     while True:
+        # 停止要求があれば生成開始前にBreak
+        if _session_stop_flags.get(session_id, False):
+            stdout_log(f"[my-gen] Generation stopped by user (session: {session_id})")
+            break
+
         iteration += 1
 
         runtime, reloaded = get_cached_runtime(runtime_key)
@@ -256,6 +270,11 @@ def _run_generation(
 
         # forever=False なら1回で終了
         if not forever:
+            break
+            
+        # 停止要求があれば1回出力した後でもBreak
+        if _session_stop_flags.get(session_id, False):
+            stdout_log(f"[my-gen] Generation stopped by user after yield (session: {session_id})")
             break
 
         # forever モード時は seed=None にしてランダム化
@@ -420,7 +439,7 @@ def build_ui() -> gr.Blocks:
         # 生成ボタンクリック時
         # Why: _run_generation はジェネレータ関数なので、Gradio は yield ごとに
         #      UI を逐次更新する。forever=True の場合は停止ボタンで中断できる。
-        gen_event = generate_btn.click(
+        generate_btn.click(
             _run_generation,
             inputs=[
                 checkpoint,
@@ -452,10 +471,16 @@ def build_ui() -> gr.Blocks:
             outputs=[*out_audios, out_log, out_timing, history_state],
         )
 
+        def _handle_stop(req: gr.Request):
+            """停止フラグを立てて現在の処理が終わり次第ループを抜ける"""
+            sid = req.session_hash if req else "default"
+            _session_stop_flags[sid] = True
+            return "※停止要求を受け付けました。現在の生成が完了すると停止します。"
+
         # 停止ボタン: generate_forever のジェネレータループを中断する
-        # Why: Gradio の cancels 引数にイベントオブジェクトを渡すと、
-        #      そのイベントのジェネレータ処理をキャンセルできる
-        stop_btn.click(fn=None, cancels=[gen_event])
+        # Why: queue=False にすることで順次処理キューをバイパスし、即座にフラグを立てる。
+        #      cancels=[] を使うと UI 全体がエラー表示になってしまう問題を回避するため。
+        stop_btn.click(fn=_handle_stop, inputs=[], outputs=[out_log], queue=False)
 
         # デバイス変更時に精度選択肢を動的更新
         model_device.change(
