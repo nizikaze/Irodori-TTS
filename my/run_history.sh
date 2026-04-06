@@ -8,4 +8,11 @@
 
 cd "$(dirname "$0")/.."
 
+# Why PYTHONPATH:
+#   Streamlitのスクリプトランナーはスクリプトのあるディレクトリ（my/）を
+#   sys.pathに追加するが、プロジェクトルートは追加しない。
+#   そのため「from my.db import ...」のようなインポートが失敗する。
+#   PYTHONPATHにプロジェクトルート（カレントディレクトリ）を設定して解決する。
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+
 uv run streamlit run my/streamlit_history.py --server.port 8502
