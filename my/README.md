@@ -11,16 +11,19 @@
 
 ```
 my/
-├── README.md          # このファイル
-├── db.py              # 生成履歴SQLiteモジュール
-├── gradio_gen.py      # 独自生成UI（Gradio）
+├── README.md              # このファイル
+├── db.py                  # 生成履歴SQLiteモジュール
+├── gradio_gen.py          # 独自生成UI（Gradio）
+├── streamlit_history.py   # 生成履歴の閲覧・編集UI（Streamlit）
+├── run_gen.sh             # 生成UI起動スクリプト
 ├── data/
-│   ├── generations.db # 生成履歴DB（自動生成）
-│   └── outputs/       # 生成した wav ファイル（自動生成）
+│   ├── generations.db     # 生成履歴DB（自動生成）
+│   └── outputs/           # 生成した wav ファイル（自動生成）
 └── docs/
     ├── fork-workflow.md
     └── myui-v1/
-        └── TODO.md    # 実装TODO
+        ├── spec.md        # 仕様書
+        └── TODO.md        # 実装TODO
 ```
 
 ## 運用方針
@@ -62,9 +65,34 @@ python -m my.gradio_gen
 - **DB 記録**: 生成のたびに SQLite に履歴を保存（`my/data/generations.db`）
 - **ファイル名**: `{YYYYMMDD_HHMMSS}_{seed}.wav` 形式で `my/data/outputs/` に保存
 
+### 閲覧UI（Streamlit）
+
+生成履歴の一覧表示・検索・編集ができるUI。
+
+**簡単起動:** `my/run_history.sh` を実行 → サーバー起動後にブラウザが自動で開きます。
+
+コマンドラインから起動する場合:
+
+```bash
+# リポジトリルートで実行
+streamlit run my/streamlit_history.py
+```
+
+起動後、ブラウザで `http://localhost:8501` にアクセスしてください。
+
+#### 主な機能
+
+- **カード形式の一覧表示**: 各レコードのテキスト・キャプション・メタ情報を表示
+- **音声再生**: 各カードに `st.audio` を配置、複数同時表示可能
+- **キーワード検索**: text / caption の部分一致検索（サイドバー）
+- **フィルター**: お気に入りのみ表示
+- **ソート**: 新しい順 / 古い順 / レーティング順 / お気に入り優先
+- **編集機能**: レーティング（1〜5）、お気に入りトグル、メモ入力（各カードの「✏️ 編集」から）
+
 ## 独自の変更・追加機能
 
 | 機能 | 概要 | ファイル |
 |------|------|------|
 | 生成履歴DB | 生成パラメータ・ファイルパスをSQLiteに永続化 | `my/db.py` |
 | 独自生成UI | 履歴表示・autoplay・連続生成に対応したGradio UI | `my/gradio_gen.py` |
+| 閲覧UI | 生成履歴の一覧表示・検索・レーティング・お気に入り・メモ編集 | `my/streamlit_history.py` |
