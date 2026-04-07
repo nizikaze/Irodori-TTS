@@ -117,6 +117,7 @@ st.markdown(
     .meta-value {
         font-size: 0.9rem;
         margin-bottom: 0.5rem;
+        word-break: break-all;
     }
 
     /* テキスト表示を見やすく */
@@ -259,8 +260,8 @@ def _format_datetime(iso_str: str | None) -> str:
         return "不明"
     # ISO 8601のパース（タイムゾーン付きに対応）
     try:
-        # 'T'を空白に置換し、タイムゾーン部分を除去して簡易表示
-        return iso_str.replace("T", " ").rsplit("+", 1)[0].rsplit("-", 1)[0][:19]
+        # 'T'を空白に置換し、先頭の19文字（YYYY-MM-DD HH:MM:SS）だけを取得する
+        return iso_str.replace("T", " ")[:19]
     except Exception:
         return iso_str
 
@@ -332,8 +333,8 @@ for row in rows:
             )
 
         # --- メタ情報（横並び表示） ---
-        # st.columns で5つの情報を横に並べる
-        meta_cols = st.columns(5)
+        # st.columnsで各項目の幅を調整（seedや日時は長いため広く取る）
+        meta_cols = st.columns([1.5, 1, 2.5, 2, 1.5])
         with meta_cols[0]:
             st.markdown('<div class="meta-label">🌱 Seed</div>', unsafe_allow_html=True)
             st.markdown(
