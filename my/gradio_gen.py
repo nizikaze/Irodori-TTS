@@ -252,19 +252,32 @@ def _run_generation(
         timing_text = _format_timings(result.stage_timings, result.total_to_decode)
 
         # --- Audio×5 の更新を組み立て ---
-        audio_updates: list[dict] = []
+        # Why: gr.update() だと autoplay=False を送ってもブラウザ側の <audio> 要素に
+        #      autoplay 属性が残留してしまう問題がある。gr.Audio() コンストラクタ形式で
+        #      返すことで、autoplay OFF 時は属性自体を設定しないようにして確実に制御する。
+        audio_updates: list[gr.Audio] = []
         for i in range(_MAX_HISTORY):
             if i < len(history_paths):
+                should_autoplay = autoplay and i == 0
                 # autoplay は最新の1件（i==0）かつ autoplay=True の場合のみ有効
-                audio_updates.append(
-                    gr.update(
-                        value=history_paths[i],
-                        visible=True,
-                        autoplay=(autoplay and i == 0),
+                # autoplay=False の場合はキーワード自体を渡さず、属性残留を防ぐ
+                if should_autoplay:
+                    audio_updates.append(
+                        gr.Audio(
+                            value=history_paths[i],
+                            visible=True,
+                            autoplay=True,
+                        )
                     )
-                )
+                else:
+                    audio_updates.append(
+                        gr.Audio(
+                            value=history_paths[i],
+                            visible=True,
+                        )
+                    )
             else:
-                audio_updates.append(gr.update(value=None, visible=False))
+                audio_updates.append(gr.Audio(value=None, visible=False))
 
         yield (*audio_updates, detail_text, timing_text, history_paths)
 
