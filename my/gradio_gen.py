@@ -449,7 +449,7 @@ def _run_generation(
         # 最後に Audio は変更せず、スピナーだけ非表示にする更新を yield
         # 各 Audio は現在の状態を維持（gr.update() で何も変えない）
         no_change_audios = [gr.update() for _ in range(_MAX_HISTORY)]
-        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False), "")
+        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False), None)
 
 
 def build_ui() -> gr.Blocks:
