@@ -6,7 +6,7 @@ Irodori-TTS 独自生成UI（Gradio）。
 - ファイル名規則を {YYYYMMDD_HHMMSS}_{seed}.wav に変更
 - 直近5件の履歴表示（Audio×5）
 - autoplay ON/OFF トグル
-- generate_forever モード（チェックONで連続生成）
+- Generate Forever / Cancel Forever ボタンによる連続生成制御
 - 生成完了時に DB へ書き込み
 
 Usage:
@@ -61,8 +61,49 @@ _MAX_HISTORY = 5
 # グローバルな停止フラグ管理用（session_hash -> 停止要求）
 _session_stop_flags: dict[str, bool] = {}
 
+# --------------------------------------------------------------------------- #
+#  セッションごとの autoplay フラグ管理
+#
+#  Why: Gradio のジェネレータ関数は、inputs を関数呼び出し時に一度だけ評価する。
+#       そのため Generate Forever のループ中に UI 上の autoplay チェックボックスを
+#       変更しても、ジェネレータ内の autoplay 引数は最初の値のまま変わらない。
+#       この問題を解決するため、autoplay の変更イベントでグローバル変数を更新し、
+#       ジェネレータのループ内からそのフラグをリアルタイムに参照する。
+# --------------------------------------------------------------------------- #
+_session_autoplay_flags: dict[str, bool] = {}
+
 # 生成した wav を保存するディレクトリ
 _OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "outputs"
+
+# --------------------------------------------------------------------------- #
+#  Generate Forever 稼働中に表示するアニメーションスピナーの HTML/CSS
+#
+#  Why: Generate Forever が動いていることをユーザーに視覚的に伝えるため。
+#       CSSアニメーション（回転）で動くスピナーを生成ボタンの近くに表示する。
+#       Gradio の gr.HTML で注入し、visible の切り替えで表示/非表示を制御する。
+# --------------------------------------------------------------------------- #
+_FOREVER_SPINNER_HTML = """
+<div style="display: flex; align-items: center; gap: 8px; padding: 4px 0;">
+    <div style="
+        width: 20px;
+        height: 20px;
+        border: 3px solid rgba(124, 58, 237, 0.2);
+        border-top-color: #7c3aed;
+        border-radius: 50%;
+        animation: forever-spin 0.8s linear infinite;
+    "></div>
+    <span style="
+        font-size: 14px;
+        font-weight: 600;
+        color: #7c3aed;
+    ">Generate Forever 実行中…</span>
+</div>
+<style>
+    @keyframes forever-spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+"""
 
 
 def _run_generation(
@@ -103,13 +144,14 @@ def _run_generation(
 
     Args:
         checkpoint〜rescale_sigma_raw: サンプリング関連パラメータ（本家と同等）
-        autoplay:      最新音声を自動再生するかどうか
-        forever:       連続生成モードかどうか
+        autoplay:      最新音声を自動再生するかどうか（初回値、以降はセッション変数を参照）
+        forever:       連続生成モードかどうか（ボタンに応じて固定値が渡される）
         history_paths: 直近5件の wav パスリスト（gr.State から受け取る）
         request:       Gradio のリクエスト情報（セッション管理用）
 
     Yields:
-        tuple: (Audio×5 の更新, ログ文字列, タイミング文字列, 更新後の history_paths)
+        tuple: (Audio×5 の更新, ログ文字列, タイミング文字列,
+                更新後の history_paths, スピナー表示状態)
     """
 
     def stdout_log(msg: str) -> None:
@@ -149,6 +191,14 @@ def _run_generation(
     # セッションIDを取得・フラグをリセット
     session_id = request.session_hash if request else "default"
     _session_stop_flags[session_id] = False
+
+    # autoplay の初期値をセッション変数にも反映
+    # Why: ジェネレータ起動前のチェックボックス状態を保持する
+    _session_autoplay_flags[session_id] = autoplay
+
+    # forever モード開始時にスピナーを表示
+    if forever:
+        stdout_log(f"[my-gen] Generate Forever started (session: {session_id})")
 
     # --- 生成ループ（forever=False なら1回で終了） ---
     # Why: while True + break で「最低1回は実行」を保証しつつ、
@@ -251,6 +301,13 @@ def _run_generation(
         detail_text = "\n".join(detail_lines)
         timing_text = _format_timings(result.stage_timings, result.total_to_decode)
 
+        # --- autoplay をリアルタイムに参照 ---
+        # Why: Generate Forever ループ中に autoplay チェックボックスが変更された場合、
+        #      セッション変数から最新の値を取得する。
+        #      autoplay OFF にすると、次の生成から autoplay 属性を付与しない
+        #      （= キュー再生にも追加されない）。
+        current_autoplay = _session_autoplay_flags.get(session_id, autoplay)
+
         # --- Audio×5 の更新を組み立て ---
         # Why: gr.update() だと autoplay=False を送ってもブラウザ側の <audio> 要素に
         #      autoplay 属性が残留してしまう問題がある。gr.Audio() コンストラクタ形式で
@@ -258,7 +315,7 @@ def _run_generation(
         audio_updates: list[gr.Audio] = []
         for i in range(_MAX_HISTORY):
             if i < len(history_paths):
-                should_autoplay = autoplay and i == 0
+                should_autoplay = current_autoplay and i == 0
                 # autoplay は最新の1件（i==0）かつ autoplay=True の場合のみ有効
                 # autoplay=False の場合はキーワード自体を渡さず、属性残留を防ぐ
                 if should_autoplay:
@@ -279,12 +336,19 @@ def _run_generation(
             else:
                 audio_updates.append(gr.Audio(value=None, visible=False))
 
-        yield (*audio_updates, detail_text, timing_text, history_paths)
+        # スピナーの表示状態を決定
+        # Why: Forever モード中はスピナーを表示し続け、終了時にのみ非表示にする。
+        #      ここではまだループ中なので forever なら visible のまま。
+        #      ループを抜けた後（関数終了時）にスピナーは非表示にしたいが、
+        #      ジェネレータの最後の yield がそれを担う。
+        spinner_visible = forever
+
+        yield (*audio_updates, detail_text, timing_text, history_paths, gr.update(visible=spinner_visible))
 
         # forever=False なら1回で終了
         if not forever:
             break
-            
+
         # 停止要求があれば1回出力した後でもBreak
         if _session_stop_flags.get(session_id, False):
             stdout_log(f"[my-gen] Generation stopped by user after yield (session: {session_id})")
@@ -295,6 +359,16 @@ def _run_generation(
         #      連続生成時はランダムシードに切り替える
         seed = None
 
+    # --- ループ終了後: スピナーを確実に非表示にする ---
+    # Why: 停止ボタンやエラーでループを抜けた場合でも、スピナーを非表示にする。
+    #      最後の yield でスピナーを非表示にすることで、UIが正しい状態に戻る。
+    if forever:
+        stdout_log(f"[my-gen] Generate Forever ended (session: {session_id})")
+        # 最後に Audio は変更せず、スピナーだけ非表示にする更新を yield
+        # 各 Audio は現在の状態を維持（gr.update() で何も変えない）
+        no_change_audios = [gr.update() for _ in range(_MAX_HISTORY)]
+        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False))
+
 
 def build_ui() -> gr.Blocks:
     """
@@ -303,7 +377,9 @@ def build_ui() -> gr.Blocks:
     本家 build_ui() との主な差分:
     - 候補グリッド（32枠）を廃止し、直近5件の履歴表示に置き換え
     - autoplay トグルを追加
-    - Forever（連続生成）チェックボックスを追加
+    - Generate Forever / Cancel Forever ボタンで連続生成を制御
+      （旧 Forever チェックボックス + Stop ボタンを廃止）
+    - Generate Forever 中にスピナーアイコンを表示
     - num_candidates スライダーを削除
     """
     default_checkpoint = _default_checkpoint()
@@ -415,14 +491,32 @@ def build_ui() -> gr.Blocks:
                 rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value="")
 
         # --- 生成制御 ---
+        # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
+        #      ボタン3つで制御する。旧 Forever チェックボックス + Stop ボタンを廃止。
+        #      Generate Forever 中はスピナーアイコンを表示して稼働中であることを示す。
         with gr.Row():
             generate_btn = gr.Button("Generate", variant="primary", scale=3)
+            generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
+            cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
             # autoplay: 最新の1件を自動再生するかの切り替え
             autoplay = gr.Checkbox(label="Autoplay", value=True, scale=1)
-            # forever: ONにすると停止ボタンを押すまで連続生成する
-            forever = gr.Checkbox(label="Forever", value=False, scale=1)
-            # Gradio の .click() で連続生成を止めるための停止ボタン
-            stop_btn = gr.Button("Stop", variant="stop", scale=1)
+
+        # --- Generate Forever 稼働中のスピナー表示 ---
+        # Why: Generate Forever が動いていることを視覚的に分かりやすくするため、
+        #      生成ボタンの近くにアニメーション付きスピナーを配置する。
+        #      初期状態では非表示で、Generate Forever 開始時に visible=True にする。
+        forever_spinner = gr.HTML(
+            value=_FOREVER_SPINNER_HTML,
+            visible=False,
+        )
+
+        # --- forever フラグ用の固定値 State ---
+        # Why: Generate ボタンと Generate Forever ボタンで同じ _run_generation 関数を
+        #      使い回すため、forever パラメータを gr.State の固定値として渡す。
+        #      Generate ボタン → forever=False（1回生成）
+        #      Generate Forever ボタン → forever=True（連続生成）
+        forever_false = gr.State(False)
+        forever_true = gr.State(True)
 
         # --- 直近5件の履歴表示 ---
         # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
@@ -447,14 +541,21 @@ def build_ui() -> gr.Blocks:
         out_log = gr.Textbox(label="Run Log", lines=6)
         out_timing = gr.Textbox(label="Timing", lines=6)
 
-        # --- イベントバインド ---
+        # --- 共通の入力リスト ---
+        # Why: Generate ボタンと Generate Forever ボタンで共通する入力パラメータを
+        #      まとめて定義し、コードの重複を避ける。
+        #      forever パラメータだけがボタンごとに異なる。
+        def _make_inputs(forever_state: gr.State) -> list:
+            """
+            ボタンごとに異なる forever State を含む入力リストを生成する。
 
-        # 生成ボタンクリック時
-        # Why: _run_generation はジェネレータ関数なので、Gradio は yield ごとに
-        #      UI を逐次更新する。forever=True の場合は停止ボタンで中断できる。
-        generate_btn.click(
-            _run_generation,
-            inputs=[
+            Args:
+                forever_state: gr.State(False) または gr.State(True)
+
+            Returns:
+                list: _run_generation に渡す入力コンポーネントのリスト
+            """
+            return [
                 checkpoint,
                 model_device,
                 model_precision,
@@ -478,22 +579,70 @@ def build_ui() -> gr.Blocks:
                 rescale_k_raw,
                 rescale_sigma_raw,
                 autoplay,
-                forever,
+                forever_state,
                 history_state,
-            ],
-            outputs=[*out_audios, out_log, out_timing, history_state],
+            ]
+
+        # 出力リスト（Audio×5 + ログ + タイミング + 履歴State + スピナー）
+        gen_outputs = [*out_audios, out_log, out_timing, history_state, forever_spinner]
+
+        # --- イベントバインド ---
+
+        # Generate ボタン: 1回だけ生成（forever=False）
+        # Why: _run_generation はジェネレータ関数なので、Gradio は yield ごとに
+        #      UI を逐次更新する。forever=False なら1回で終了する。
+        generate_btn.click(
+            _run_generation,
+            inputs=_make_inputs(forever_false),
+            outputs=gen_outputs,
+        )
+
+        # Generate Forever ボタン: 連続生成（forever=True）
+        # Why: forever=True の固定値を渡すことで、ジェネレータが停止要求まで
+        #      ループし続ける。スピナーは _run_generation 内で制御される。
+        generate_forever_btn.click(
+            _run_generation,
+            inputs=_make_inputs(forever_true),
+            outputs=gen_outputs,
         )
 
         def _handle_stop(req: gr.Request):
-            """停止フラグを立てて現在の処理が終わり次第ループを抜ける"""
+            """
+            停止フラグを立てて現在の処理が終わり次第ループを抜ける。
+            Cancel Forever ボタンから呼ばれる。
+            """
             sid = req.session_hash if req else "default"
             _session_stop_flags[sid] = True
             return "※停止要求を受け付けました。現在の生成が完了すると停止します。"
 
-        # 停止ボタン: generate_forever のジェネレータループを中断する
+        # Cancel Forever ボタン: Generate Forever のジェネレータループを中断する
         # Why: queue=False にすることで順次処理キューをバイパスし、即座にフラグを立てる。
         #      cancels=[] を使うと UI 全体がエラー表示になってしまう問題を回避するため。
-        stop_btn.click(fn=_handle_stop, inputs=[], outputs=[out_log], queue=False)
+        cancel_forever_btn.click(fn=_handle_stop, inputs=[], outputs=[out_log], queue=False)
+
+        def _handle_autoplay_change(value: bool, req: gr.Request):
+            """
+            autoplay チェックボックスの変更をセッション変数に反映する。
+
+            Why: Generate Forever ループ中に autoplay を OFF にした場合、
+                 次の生成から autoplay 属性を付与しないようにするため。
+                 ジェネレータの inputs は起動時に一度だけ評価されるので、
+                 ループ中の変更はこのイベントハンドラ経由でしか取得できない。
+            """
+            sid = req.session_hash if req else "default"
+            _session_autoplay_flags[sid] = value
+            stdout_msg = "ON" if value else "OFF"
+            print(f"[my-gen] autoplay changed to {stdout_msg} (session: {sid})", flush=True)
+
+        # autoplay チェックボックスの変更イベント
+        # Why: queue=False で即座に反映し、Generate Forever ループ中でも
+        #      次の生成から autoplay の ON/OFF が反映されるようにする。
+        autoplay.change(
+            fn=_handle_autoplay_change,
+            inputs=[autoplay],
+            outputs=[],
+            queue=False,
+        )
 
         # デバイス変更時に精度選択肢を動的更新
         model_device.change(
