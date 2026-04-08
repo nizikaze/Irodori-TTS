@@ -116,202 +116,91 @@ _FOREVER_SPINNER_HTML = """
 #       通知する仕組みを持っていない。そのため、再生中に新しい音声が来たとき
 #       「現在の再生を中断せずキューに積み、再生完了後に次を再生する」という
 #       キュー再生を実現するには、ブラウザ側の JavaScript で制御する必要がある。
-#
-#  仕組み:
-#       1. gr.Blocks(head=...) で <script> タグを注入する
-#       2. MutationObserver で #audio-0 内の <audio> 要素の src 変更を監視
-#       3. 再生中に新しい src が来たら autoplay 属性を除去しキューに積む
-#       4. ended イベントで次のキューアイテムを再生
-#       5. キューの状態をインジケーター (#queue-indicator) に表示
-#
-#  注意:
-#       - Gradio の DOM 構造に依存するため、バージョンアップで壊れる可能性がある
-#       - autoplay OFF 時は Python 側が autoplay 属性を設定しないため、
-#         JS のキューには積まれない（従来と同じ動作）
+#       また Gradio の UI は頻繁に DOM や src を書き換えるため、それとは独立した
+#       専用の <audio> プレイヤーを用いることで安定した再生を実現する。
 # --------------------------------------------------------------------------- #
 _QUEUE_PLAYBACK_JS = f"""
 <script>
 (function() {{
     'use strict';
 
-    // --- キュー管理の状態 ---
-    // audioQueue: 再生待ちの音声 URL を格納する配列（FIFO）
-    const audioQueue = [];
-    // isPlaying: 現在 <audio> 要素で再生中かどうか
-    let isPlaying = false;
-    // currentSrc: 現在再生中（または最後に設定された）音声の URL
-    let currentSrc = null;
-    // MAX_QUEUE_SIZE: キューの最大サイズ
+    window._queueAudioList = [];
+    window._isQueuePlaying = false;
+    window._queueForcePaused = false;
     const MAX_QUEUE_SIZE = {_MAX_QUEUE_SIZE};
 
     /**
-     * キューインジケーターの表示を更新する。
-     * #queue-indicator という要素が存在すれば、キュー内のアイテム数を表示する。
+     * Python 側から発行された新しいファイルパスをキューに追加する。
      */
-    function updateIndicator() {{
-        const el = document.getElementById('queue-indicator');
-        if (!el) return;
-        // textarea 要素を探す（Gradio の Textbox は内部的に textarea を使う）
-        const textarea = el.querySelector('textarea');
-        if (textarea) {{
-            const count = audioQueue.length;
-            // Gradio の input イベントをシミュレートして値を反映
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                window.HTMLTextAreaElement.prototype, 'value'
-            ).set;
-            nativeInputValueSetter.call(
-                textarea,
-                count > 0 ? 'キュー: ' + count + '件待ち' : ''
-            );
-            textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    window.enqueueAudio = function(filepath) {{
+        if (!filepath) return;
+        
+        // Gradio serves files passed to components securely via /file=
+        const url = "/file=" + filepath;
+        
+        window._queueAudioList.push(url);
+        console.log('[queue-playback] queued:', url, 'size:', window._queueAudioList.length);
+        window.updateQueueUI();
+        
+        // If not currently playing and not forcibly paused by user, start now
+        if (!window._isQueuePlaying && !window._queueForcePaused) {{
+            window.playNextInQueue();
         }}
-    }}
+    }};
 
     /**
-     * 指定された <audio> 要素で音声を再生する。
+     * 次のキューを再生する。
      */
-    function playAudio(audioEl, src) {{
-        isPlaying = true;
-        currentSrc = src;
-        audioEl.src = src;
-        audioEl.play().catch(function(e) {{
-            console.warn('[queue-playback] play() blocked:', e.message);
-            isPlaying = false;
-            updateIndicator();
-        }});
-        console.log('[queue-playback] playing:', src);
-    }}
+    window.playNextInQueue = function() {{
+        const audioEl = document.getElementById('queue-audio');
+        if (!audioEl) return;
+        
+        if (window._queueAudioList.length > 0) {{
+            let url = window._queueAudioList.shift();
+            
+            // max queue size limit
+            while (window._queueAudioList.length > MAX_QUEUE_SIZE) {{
+                window._queueAudioList.shift();
+            }}
+
+            window._isQueuePlaying = true;
+            window._queueForcePaused = false;
+            audioEl.src = url;
+            audioEl.play().catch(function(e) {{
+                console.warn('[queue-playback] play() blocked:', e.message);
+                window._isQueuePlaying = false;
+                window.updateQueueUI();
+            }});
+            console.log('[queue-playback] playing:', url);
+        }} else {{
+            window._isQueuePlaying = false;
+            console.log('[queue-playback] queue empty, idle');
+        }}
+        window.updateQueueUI();
+    }};
 
     /**
-     * DOM ツリー（Shadow DOM を含む）から最も適切な再生用 <audio> 要素を探す
+     * キューのUI状態を更新する。
      */
-    function getRealAudioElement(root) {{
-        if (!root) return null;
+    window.updateQueueUI = function() {{
+        const container = document.getElementById('queue-player-container');
+        const badge = document.getElementById('queue-count-badge');
+        if (!container || !badge) return;
         
-        // 1. シャドウ DOM を持つ要素を再帰的に探す
-        const allNodes = (root.querySelectorAll ? root.querySelectorAll('*') : []);
-        for (let i = 0; i < allNodes.length; i++) {{
-            if (allNodes[i].shadowRoot) {{
-                const shadowAudio = getRealAudioElement(allNodes[i].shadowRoot);
-                if (shadowAudio) return shadowAudio;
-            }}
-        }}
-        
-        // 2. 通常の <audio> を探し、隠し（hidden）でないものを返す
-        const audios = (root.querySelectorAll ? root.querySelectorAll('audio') : []);
-        for (let i = 0; i < audios.length; i++) {{
-            if (!audios[i].hasAttribute('hidden')) {{
-                return audios[i];
-            }}
+        // Always show the player if there's anything playing, forced paused, or waiting
+        if (window._isQueuePlaying || window._queueForcePaused || window._queueAudioList.length > 0) {{
+            container.style.display = 'block';
+        }} else {{
+            container.style.display = 'none';
         }}
         
-        // 3. なければ最初のものをとりあえず返す
-        return audios.length > 0 ? audios[0] : null;
-    }}
-
-    /**
-     * #audio-0 コンポーネント内の <audio> 要素を監視し、
-     * src 変更時のキュー制御と ended イベントの処理をセットアップする。
-     */
-    function setupQueuePlayback() {{
-        const container = document.getElementById('audio-0');
-        if (!container) {{
-            console.warn('[queue-playback] #audio-0 not found, retrying...');
-            setTimeout(setupQueuePlayback, 500);
-            return;
+        if (window._queueAudioList.length > 0) {{
+            badge.style.display = 'inline-block';
+            badge.innerText = window._queueAudioList.length;
+        }} else {{
+            badge.style.display = 'none';
         }}
-
-        // 現在リスナーを付けている <audio> 要素を追跡
-        let trackedAudio = null;
-
-        function attachListeners(audioEl) {{
-            if (trackedAudio === audioEl) return;
-            trackedAudio = audioEl;
-
-            audioEl.addEventListener('ended', function() {{
-                console.log('[queue-playback] ended event fired');
-                if (audioQueue.length > 0) {{
-                    const nextSrc = audioQueue.shift();
-                    console.log('[queue-playback] playing next from queue, remaining:', audioQueue.length);
-                    updateIndicator();
-                    playAudio(audioEl, nextSrc);
-                }} else {{
-                    isPlaying = false;
-                    console.log('[queue-playback] queue empty, idle');
-                    updateIndicator();
-                }}
-            }});
-
-            audioEl.addEventListener('pause', function() {{
-                if (!audioEl.ended) {{
-                    console.log('[queue-playback] paused by user');
-                }}
-            }});
-
-            audioEl.addEventListener('play', function() {{
-                isPlaying = true;
-                currentSrc = audioEl.src;
-                console.log('[queue-playback] play started');
-            }});
-        }}
-
-        function checkAndSetup() {{
-            // Shadow DOMを含め、表示されている実際の再生要素を取得する
-            const audioEl = getRealAudioElement(container);
-            if (!audioEl) return;
-
-            attachListeners(audioEl);
-
-            const newSrc = audioEl.src;
-            if (newSrc && newSrc !== currentSrc && newSrc !== '' && !newSrc.endsWith('/')) {{
-                if (isPlaying) {{
-                    audioEl.removeAttribute('autoplay');
-                    audioEl.pause();
-
-                    if (audioQueue.length >= MAX_QUEUE_SIZE) {{
-                        const dropped = audioQueue.shift();
-                        console.log('[queue-playback] queue full, dropped oldest:', dropped);
-                    }}
-                    audioQueue.push(newSrc);
-                    console.log('[queue-playback] queued:', newSrc, 'queue size:', audioQueue.length);
-                    updateIndicator();
-
-                    audioEl.src = currentSrc;
-                    audioEl.play().catch(function() {{}});
-                }} else {{
-                    currentSrc = newSrc;
-                    isPlaying = true;
-                    console.log('[queue-playback] new audio, auto-playing:', newSrc);
-                    updateIndicator();
-                }}
-            }}
-        }}
-
-        const observer = new MutationObserver(function(mutations) {{
-            setTimeout(checkAndSetup, 50);
-        }});
-
-        observer.observe(container, {{
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['src']
-        }});
-
-        // シャドウDOM内の src 変更を確実にとらえるため、定期的な監視も併用する
-        setInterval(checkAndSetup, 500);
-
-        checkAndSetup();
-        console.log('[queue-playback] initialized, observing #audio-0');
-    }}
-
-    if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', function() {{
-            setTimeout(setupQueuePlayback, 1000);
-        }});
-    }} else {{
-        setTimeout(setupQueuePlayback, 1000);
-    }}
+    }};
 }})()
 </script>
 """
@@ -514,52 +403,32 @@ def _run_generation(
         # --- autoplay をリアルタイムに参照 ---
         # Why: Generate Forever ループ中に autoplay チェックボックスが変更された場合、
         #      セッション変数から最新の値を取得する。
-        #      autoplay OFF にすると、次の生成から autoplay 属性を付与しない
-        #      （= キュー再生にも追加されない）。
         current_autoplay = _session_autoplay_flags.get(session_id, autoplay)
 
+        # キュー再生用: Autoplay ON ならファイルパスを、OFF なら空文字を返す
+        new_queue_path = out_path_str if current_autoplay else ""
+
         # --- Audio×5 の更新を組み立て ---
-        # Why: gr.update() だと autoplay=False を送ってもブラウザ側の <audio> 要素に
-        #      autoplay 属性が残留してしまう問題がある。gr.Audio() コンストラクタ形式で
-        #      返すことで、autoplay OFF 時は属性自体を設定しないようにして確実に制御する。
-        #
-        # キュー再生の仕組み（autoplay ON 時）:
-        #   Python 側は常に autoplay=True で最新音声を設定する。
-        #   ブラウザ側の JS（_QUEUE_PLAYBACK_JS）が再生中かどうかを判定し、
-        #   再生中なら autoplay を除去してキューに積む。
-        #   つまり「キューに積むか即再生か」の判断は JS 側に委ねている。
+        # Why: キュー再生用に独立したオーディオプレイヤーが全てを処理するため、
+        #      履歴一覧の Audio コンポーネントは autoplay=False で固定する。
+        #      これにより、Gradio 側が勝手に再生を開始して再生音が重複するのを防ぐ。
         audio_updates: list[gr.Audio] = []
         for i in range(_MAX_HISTORY):
             if i < len(history_paths):
-                should_autoplay = current_autoplay and i == 0
-                # autoplay は最新の1件（i==0）かつ autoplay=True の場合のみ有効
-                # autoplay=False の場合はキーワード自体を渡さず、属性残留を防ぐ
-                if should_autoplay:
-                    audio_updates.append(
-                        gr.Audio(
-                            value=history_paths[i],
-                            visible=True,
-                            autoplay=True,
-                        )
+                audio_updates.append(
+                    gr.Audio(
+                        value=history_paths[i],
+                        visible=True,
+                        autoplay=False,
                     )
-                else:
-                    audio_updates.append(
-                        gr.Audio(
-                            value=history_paths[i],
-                            visible=True,
-                        )
-                    )
+                )
             else:
                 audio_updates.append(gr.Audio(value=None, visible=False))
 
         # スピナーの表示状態を決定
-        # Why: Forever モード中はスピナーを表示し続け、終了時にのみ非表示にする。
-        #      ここではまだループ中なので forever なら visible のまま。
-        #      ループを抜けた後（関数終了時）にスピナーは非表示にしたいが、
-        #      ジェネレータの最後の yield がそれを担う。
         spinner_visible = forever
 
-        yield (*audio_updates, detail_text, timing_text, history_paths, gr.update(visible=spinner_visible))
+        yield (*audio_updates, detail_text, timing_text, history_paths, gr.update(visible=spinner_visible), new_queue_path)
 
         # forever=False なら1回で終了
         if not forever:
@@ -583,7 +452,7 @@ def _run_generation(
         # 最後に Audio は変更せず、スピナーだけ非表示にする更新を yield
         # 各 Audio は現在の状態を維持（gr.update() で何も変えない）
         no_change_audios = [gr.update() for _ in range(_MAX_HISTORY)]
-        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False))
+        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False), "")
 
 
 def build_ui() -> gr.Blocks:
@@ -759,15 +628,34 @@ def build_ui() -> gr.Blocks:
                 )
             )
 
-        # --- キューインジケーター ---
-        # Why: Forever モードで生成が再生より速い場合、キューに溜まった件数を
-        #      ユーザーに知らせるための表示。JS 側から値を更新する。
-        gr.Textbox(
-            label="",
-            interactive=False,
-            elem_id="queue-indicator",
-            max_lines=1,
-            container=False,
+        # --- キュー用 UI ---
+        # Why: 独立した再生プレイヤーでキューを管理するため、コンテナごと表示する。
+        gr.HTML("""
+        <div id="queue-player-container" style="display:none; padding: 10px; background: #f3f4f6; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 15px;">
+            <div style="font-size:14px; font-weight:bold; margin-bottom:5px; color: #374151;">
+                ▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span>
+            </div>
+            <audio id="queue-audio" controls style="width: 100%;" 
+                onended="if(window.playNextInQueue) window.playNextInQueue()"
+                onplay="window._isQueuePlaying = true; window._queueForcePaused = false; if(window.updateQueueUI) window.updateQueueUI()"
+                onpause="if(!this.ended){ window._queueForcePaused = true; window._isQueuePlaying = false; if(window.updateQueueUI) window.updateQueueUI(); }"
+            ></audio>
+        </div>
+        """)
+        
+        # --- キュー処理用隠し Input ---
+        # 生成完了のたびにこのテキストボックスの中身が更新され、JS(enqueueAudio)が発火する
+        queue_new_item = gr.Textbox(visible=False, elem_id="queue-new-item")
+        queue_new_item.change(
+            fn=None,
+            inputs=[queue_new_item],
+            js="""
+            function(filepath) {
+                if (filepath && typeof window.enqueueAudio === 'function') {
+                    window.enqueueAudio(filepath);
+                }
+            }
+            """
         )
 
         # --- ログ出力 ---
@@ -816,8 +704,8 @@ def build_ui() -> gr.Blocks:
                 history_state,
             ]
 
-        # 出力リスト（Audio×5 + ログ + タイミング + 履歴State + スピナー）
-        gen_outputs = [*out_audios, out_log, out_timing, history_state, forever_spinner]
+        # 出力リスト（Audio×5 + ログ + タイミング + 履歴State + スピナー + 新規キューパス）
+        gen_outputs = [*out_audios, out_log, out_timing, history_state, forever_spinner, queue_new_item]
 
         # --- イベントバインド ---
 
