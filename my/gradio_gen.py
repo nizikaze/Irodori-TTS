@@ -130,13 +130,10 @@ _QUEUE_PLAYBACK_JS = f"""
     const MAX_QUEUE_SIZE = {_MAX_QUEUE_SIZE};
 
     /**
-     * Python 側から発行された新しいファイルパスをキューに追加する。
+     * Python 側から発行された新しいオーディオURLをキューに追加する。
      */
-    window.enqueueAudio = function(filepath) {{
-        if (!filepath) return;
-        
-        // Gradio serves files passed to components securely via /file=
-        const url = "/file=" + filepath;
+    window.enqueueAudio = function(url) {{
+        if (!url) return;
         
         window._queueAudioList.push(url);
         console.log('[queue-playback] queued:', url, 'size:', window._queueAudioList.length);
@@ -405,8 +402,8 @@ def _run_generation(
         #      セッション変数から最新の値を取得する。
         current_autoplay = _session_autoplay_flags.get(session_id, autoplay)
 
-        # キュー再生用: Autoplay ON ならファイルパスを、OFF なら空文字を返す
-        new_queue_path = out_path_str if current_autoplay else ""
+        # キュー再生用: Autoplay ON ならファイルパスを、OFF なら None を返す
+        new_queue_path = out_path_str if current_autoplay else None
 
         # --- Audio×5 の更新を組み立て ---
         # Why: キュー再生用に独立したオーディオプレイヤーが全てを処理するため、
@@ -621,16 +618,16 @@ def build_ui() -> gr.Blocks:
         </div>
         """)
         
-        # --- キュー処理用隠し Input ---
-        # 生成完了のたびにこのテキストボックスの中身が更新され、JS(enqueueAudio)が発火する
-        queue_new_item = gr.Textbox(visible=False, elem_id="queue-new-item")
+        # --- キュー処理用隠し File ---
+        # 生成完了のたびにこのコンポーネントに音声パスが渡され、JS(enqueueAudio)にURL(Token付)が発火する
+        queue_new_item = gr.File(visible=False, elem_id="queue-new-item")
         queue_new_item.change(
             fn=None,
             inputs=[queue_new_item],
             js="""
-            function(filepath) {
-                if (filepath && typeof window.enqueueAudio === 'function') {
-                    window.enqueueAudio(filepath);
+            function(fileObj) {
+                if (fileObj && fileObj.url && typeof window.enqueueAudio === 'function') {
+                    window.enqueueAudio(fileObj.url);
                 }
             }
             """
