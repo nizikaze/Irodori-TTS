@@ -8,6 +8,7 @@ Irodori-TTS 独自生成UI（Gradio）。
 - autoplay ON/OFF トグル
 - Generate Forever / Cancel Forever ボタンによる連続生成制御
 - 生成完了時に DB へ書き込み
+- キュー再生（再生中に新しい音声が来ても中断せずキューに積む）
 
 Usage:
     python -m my.gradio_gen [--server-name 127.0.0.1] [--server-port 7862]
@@ -57,6 +58,9 @@ from my.db import init_db, insert_generation
 
 # 直近履歴の最大表示件数
 _MAX_HISTORY = 5
+
+# キューの最大サイズ（これ以上溜まると古いものから破棄）
+_MAX_QUEUE_SIZE = 10
 
 # グローバルな停止フラグ管理用（session_hash -> 停止要求）
 _session_stop_flags: dict[str, bool] = {}
@@ -312,6 +316,12 @@ def _run_generation(
         # Why: gr.update() だと autoplay=False を送ってもブラウザ側の <audio> 要素に
         #      autoplay 属性が残留してしまう問題がある。gr.Audio() コンストラクタ形式で
         #      返すことで、autoplay OFF 時は属性自体を設定しないようにして確実に制御する。
+        #
+        # キュー再生の仕組み（autoplay ON 時）:
+        #   Python 側は常に autoplay=True で最新音声を設定する。
+        #   ブラウザ側の JS（_QUEUE_PLAYBACK_JS）が再生中かどうかを判定し、
+        #   再生中なら autoplay を除去してキューに積む。
+        #   つまり「キューに積むか即再生か」の判断は JS 側に委ねている。
         audio_updates: list[gr.Audio] = []
         for i in range(_MAX_HISTORY):
             if i < len(history_paths):
@@ -389,7 +399,9 @@ def build_ui() -> gr.Blocks:
     model_precision_choices = _precision_choices_for_device(default_model_device)
     codec_precision_choices = _precision_choices_for_device(default_codec_device)
 
-    with gr.Blocks(title="Irodori-TTS My Generator") as demo:
+    # head: HTML の <head> セクションに注入するカスタム JavaScript
+    # キュー再生用の JS をここで読み込む
+    with gr.Blocks(title="Irodori-TTS My Generator", head=_QUEUE_PLAYBACK_JS) as demo:
         gr.Markdown("# Irodori-TTS 独自生成UI")
         gr.Markdown(
             "VoiceDesign版モデル向けの独自UIです。"
@@ -528,14 +540,29 @@ def build_ui() -> gr.Blocks:
 
         out_audios: list[gr.Audio] = []
         for i in range(_MAX_HISTORY):
+            # elem_id: カスタム JS から DOM 要素を特定するために使用
+            # 最新の1件 (i=0) は "audio-0" という ID を付与し、
+            # JS のキュー再生ロジックがこの要素を監視する
             out_audios.append(
                 gr.Audio(
                     label=f"#{i + 1}",
                     type="filepath",
                     interactive=False,
                     visible=(False),  # 初期状態では非表示（生成後に表示される）
+                    elem_id=f"audio-{i}",
                 )
             )
+
+        # --- キューインジケーター ---
+        # Why: Forever モードで生成が再生より速い場合、キューに溜まった件数を
+        #      ユーザーに知らせるための表示。JS 側から値を更新する。
+        gr.Textbox(
+            label="",
+            interactive=False,
+            elem_id="queue-indicator",
+            max_lines=1,
+            container=False,
+        )
 
         # --- ログ出力 ---
         out_log = gr.Textbox(label="Run Log", lines=6)
