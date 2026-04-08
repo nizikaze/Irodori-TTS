@@ -70,9 +70,9 @@
   - autoplay OFF 時はキュー再生も無効（従来と同じ動作）
 
 ## Phase 8: Generate Foreverに関する挙動をEasyReforgeに寄せる
-- [ ] Generate Forever中であることがわかりやすいように、生成ボタンの近くにGenerate Forever中だけ動くアイコンを設置
-- [ ] 現在のチェックボックスとストップボタンによるUIから、Generate ForeverボタンとCancel ForeverボタンでGenerate ForeverをコントロールするUIに変更する
-- [ ] Generate Forever中にautoplayのチェックを外すと次のファイルからキューに追加しない
+- [x] Generate Forever中であることがわかりやすいように、生成ボタンの近くにGenerate Forever中だけ動くアイコンを設置
+- [x] 現在のチェックボックスとストップボタンによるUIから、Generate ForeverボタンとCancel ForeverボタンでGenerate ForeverをコントロールするUIに変更する
+- [x] Generate Forever中にautoplayのチェックを外すと次のファイルからキューに追加しない
 
 ## Phase : 
 
