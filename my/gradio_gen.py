@@ -109,6 +109,218 @@ _FOREVER_SPINNER_HTML = """
 </style>
 """
 
+# --------------------------------------------------------------------------- #
+#  キュー再生用カスタム JavaScript
+#
+#  Why: gr.Audio は HTML5 の <audio> 要素の ended イベントを Python 側に
+#       通知する仕組みを持っていない。そのため、再生中に新しい音声が来たとき
+#       「現在の再生を中断せずキューに積み、再生完了後に次を再生する」という
+#       キュー再生を実現するには、ブラウザ側の JavaScript で制御する必要がある。
+#
+#  仕組み:
+#       1. gr.Blocks(head=...) で <script> タグを注入する
+#       2. MutationObserver で #audio-0 内の <audio> 要素の src 変更を監視
+#       3. 再生中に新しい src が来たら autoplay 属性を除去しキューに積む
+#       4. ended イベントで次のキューアイテムを再生
+#       5. キューの状態をインジケーター (#queue-indicator) に表示
+#
+#  注意:
+#       - Gradio の DOM 構造に依存するため、バージョンアップで壊れる可能性がある
+#       - autoplay OFF 時は Python 側が autoplay 属性を設定しないため、
+#         JS のキューには積まれない（従来と同じ動作）
+# --------------------------------------------------------------------------- #
+_QUEUE_PLAYBACK_JS = f"""
+<script>
+(function() {{
+    'use strict';
+
+    // --- キュー管理の状態 ---
+    // audioQueue: 再生待ちの音声 URL を格納する配列（FIFO）
+    const audioQueue = [];
+    // isPlaying: 現在 <audio> 要素で再生中かどうか
+    let isPlaying = false;
+    // currentSrc: 現在再生中（または最後に設定された）音声の URL
+    let currentSrc = null;
+    // MAX_QUEUE_SIZE: キューの最大サイズ（Python 側の定数と同じ値）
+    const MAX_QUEUE_SIZE = {{_MAX_QUEUE_SIZE}};
+
+    /**
+     * キューインジケーターの表示を更新する。
+     * #queue-indicator という要素が存在すれば、キュー内のアイテム数を表示する。
+     */
+    function updateIndicator() {{
+        const el = document.getElementById('queue-indicator');
+        if (!el) return;
+        // textarea 要素を探す（Gradio の Textbox は内部的に textarea を使う）
+        const textarea = el.querySelector('textarea');
+        if (textarea) {{
+            const count = audioQueue.length;
+            // Gradio の input イベントをシミュレートして値を反映
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype, 'value'
+            ).set;
+            nativeInputValueSetter.call(
+                textarea,
+                count > 0 ? 'キュー: ' + count + '件待ち' : ''
+            );
+            textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        }}
+    }}
+
+    /**
+     * 指定された <audio> 要素で音声を再生する。
+     * @param {{HTMLAudioElement}} audioEl - 再生対象の audio 要素
+     * @param {{string}} src - 再生する音声の URL
+     */
+    function playAudio(audioEl, src) {{
+        isPlaying = true;
+        currentSrc = src;
+        audioEl.src = src;
+        audioEl.play().catch(function(e) {{
+            // ブラウザのAutoplay Policyによりブロックされた場合のフォールバック
+            console.warn('[queue-playback] play() blocked:', e.message);
+            isPlaying = false;
+            updateIndicator();
+        }});
+        console.log('[queue-playback] playing:', src);
+    }}
+
+    /**
+     * #audio-0 コンポーネント内の <audio> 要素を監視し、
+     * src 変更時のキュー制御と ended イベントの処理をセットアップする。
+     *
+     * Why MutationObserver を使うか:
+     *   Gradio は yield のたびに DOM を再構築することがある。
+     *   <audio> 要素自体が置き換わる可能性があるため、常に監視して
+     *   新しい <audio> 要素にもイベントリスナーを付け直す必要がある。
+     */
+    function setupQueuePlayback() {{
+        const container = document.getElementById('audio-0');
+        if (!container) {{
+            console.warn('[queue-playback] #audio-0 not found, retrying...');
+            setTimeout(setupQueuePlayback, 500);
+            return;
+        }}
+
+        // 現在リスナーを付けている <audio> 要素を追跡
+        let trackedAudio = null;
+
+        /**
+         * <audio> 要素にイベントリスナーを設定する。
+         * @param {{HTMLAudioElement}} audioEl - 対象の audio 要素
+         */
+        function attachListeners(audioEl) {{
+            if (trackedAudio === audioEl) return; // 既にアタッチ済み
+            trackedAudio = audioEl;
+
+            // ended: 再生が最後まで到達したときに発火するブラウザ標準イベント
+            audioEl.addEventListener('ended', function() {{
+                console.log('[queue-playback] ended event fired');
+                if (audioQueue.length > 0) {{
+                    // キューに次がある場合: 先頭を取り出して再生
+                    const nextSrc = audioQueue.shift();
+                    console.log('[queue-playback] playing next from queue, remaining:', audioQueue.length);
+                    updateIndicator();
+                    playAudio(audioEl, nextSrc);
+                }} else {{
+                    // キューが空の場合: 再生終了
+                    isPlaying = false;
+                    console.log('[queue-playback] queue empty, idle');
+                    updateIndicator();
+                }}
+            }});
+
+            // pause: ユーザーが手動で一時停止した場合
+            audioEl.addEventListener('pause', function() {{
+                // ended ではなくユーザー操作による pause の場合
+                // （ended の直前にも pause は発火するが、ended 側で処理済み）
+                if (!audioEl.ended) {{
+                    console.log('[queue-playback] paused by user');
+                }}
+            }});
+
+            // play: 再生開始時（ユーザー操作またはautoplay）
+            audioEl.addEventListener('play', function() {{
+                isPlaying = true;
+                currentSrc = audioEl.src;
+                console.log('[queue-playback] play started');
+            }});
+        }}
+
+        /**
+         * コンテナ内の <audio> 要素を探してリスナーを設定する。
+         * audio の src が変わった場合のキュー制御も行う。
+         */
+        function checkAndSetup() {{
+            // Gradio 6.x では <audio> は shadow DOM ではなく通常の子要素
+            const audioEl = container.querySelector('audio');
+            if (!audioEl) return;
+
+            attachListeners(audioEl);
+
+            // src が変わった && 再生中の場合: キューに積む
+            const newSrc = audioEl.src;
+            if (newSrc && newSrc !== currentSrc && newSrc !== '' && !newSrc.endsWith('/')) {{
+                if (isPlaying) {{
+                    // 再生中 → autoplay を除去してキューに追加
+                    audioEl.removeAttribute('autoplay');
+                    audioEl.pause();
+
+                    // キューが上限を超えた場合は古いものを破棄
+                    if (audioQueue.length >= MAX_QUEUE_SIZE) {{
+                        const dropped = audioQueue.shift();
+                        console.log('[queue-playback] queue full, dropped oldest:', dropped);
+                    }}
+                    audioQueue.push(newSrc);
+                    console.log('[queue-playback] queued:', newSrc, 'queue size:', audioQueue.length);
+                    updateIndicator();
+
+                    // 元の再生中の音声に戻す
+                    // Why: Gradio が src を新しいものに上書きしてしまうため、
+                    //      再生中の音声を復元して中断を防ぐ
+                    audioEl.src = currentSrc;
+                    audioEl.play().catch(function() {{}});
+                }} else {{
+                    // 再生中でない → そのまま再生させる（autoplay に任せる）
+                    currentSrc = newSrc;
+                    isPlaying = true;
+                    console.log('[queue-playback] new audio, auto-playing:', newSrc);
+                    updateIndicator();
+                }}
+            }}
+        }}
+
+        // MutationObserver: DOM の変更を監視する仕組み
+        // #audio-0 の子要素や属性が変わるたびに checkAndSetup を呼ぶ
+        const observer = new MutationObserver(function(mutations) {{
+            // 少し遅延させて Gradio の DOM 更新が完了するのを待つ
+            setTimeout(checkAndSetup, 50);
+        }});
+
+        observer.observe(container, {{
+            childList: true,   // 子要素の追加・削除を監視
+            subtree: true,     // 孫要素以下も含めて監視
+            attributes: true,  // 属性の変更を監視
+            attributeFilter: ['src']  // src 属性の変更のみを対象
+        }});
+
+        // 初回チェック
+        checkAndSetup();
+        console.log('[queue-playback] initialized, observing #audio-0');
+    }}
+
+    // ページ読み込み完了後にセットアップを開始
+    // Why: Gradio の DOM 構築が完了してから audio 要素を探す必要がある
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', function() {{
+            setTimeout(setupQueuePlayback, 1000);
+        }});
+    }} else {{
+        setTimeout(setupQueuePlayback, 1000);
+    }}
+}})()
+</script>
+"""
 
 def _run_generation(
     checkpoint: str,
