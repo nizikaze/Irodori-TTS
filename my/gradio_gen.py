@@ -605,31 +605,9 @@ def build_ui() -> gr.Blocks:
         forever_false = gr.State(False)
         forever_true = gr.State(True)
 
-        # --- 直近5件の履歴表示 ---
-        # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
-        #      最新が上に来るため、生成のたびに新しい音声がすぐ確認できる。
-        gr.Markdown("### 直近の生成結果")
-        # gr.State: Gradio のセッション内でデータを保持する仕組み
-        # ここでは直近5件の wav ファイルパスを配列で管理する
-        history_state = gr.State(value=[])
-
-        out_audios: list[gr.Audio] = []
-        for i in range(_MAX_HISTORY):
-            # elem_id: カスタム JS から DOM 要素を特定するために使用
-            # 最新の1件 (i=0) は "audio-0" という ID を付与し、
-            # JS のキュー再生ロジックがこの要素を監視する
-            out_audios.append(
-                gr.Audio(
-                    label=f"#{i + 1}",
-                    type="filepath",
-                    interactive=False,
-                    visible=(False),  # 初期状態では非表示（生成後に表示される）
-                    elem_id=f"audio-{i}",
-                )
-            )
-
         # --- キュー用 UI ---
         # Why: 独立した再生プレイヤーでキューを管理するため、コンテナごと表示する。
+        #      直近の生成結果より上に配置することで、ユーザーの目に留まりやすくする。
         gr.HTML("""
         <div id="queue-player-container" style="display:none; padding: 10px; background: #f3f4f6; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 15px;">
             <div style="font-size:14px; font-weight:bold; margin-bottom:5px; color: #374151;">
@@ -657,6 +635,29 @@ def build_ui() -> gr.Blocks:
             }
             """
         )
+
+        # --- 直近5件の履歴表示 ---
+        # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
+        #      最新が上に来るため、生成のたびに新しい音声がすぐ確認できる。
+        gr.Markdown("### 直近の生成結果")
+        # gr.State: Gradio のセッション内でデータを保持する仕組み
+        # ここでは直近5件の wav ファイルパスを配列で管理する
+        history_state = gr.State(value=[])
+
+        out_audios: list[gr.Audio] = []
+        for i in range(_MAX_HISTORY):
+            # elem_id: カスタム JS から DOM 要素を特定するために使用
+            # 最新の1件 (i=0) は "audio-0" という ID を付与し、
+            # JS のキュー再生ロジックがこの要素を監視する
+            out_audios.append(
+                gr.Audio(
+                    label=f"#{i + 1}",
+                    type="filepath",
+                    interactive=False,
+                    visible=(False),  # 初期状態では非表示（生成後に表示される）
+                    elem_id=f"audio-{i}",
+                )
+            )
 
         # --- ログ出力 ---
         out_log = gr.Textbox(label="Run Log", lines=6)
@@ -811,6 +812,7 @@ def main() -> None:
         share=bool(args.share),
         debug=bool(args.debug),
         inbrowser=True,
+        allowed_paths=[str(_OUTPUT_DIR)],
     )
 
 
