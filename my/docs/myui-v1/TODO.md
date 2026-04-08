@@ -74,6 +74,10 @@
 - [x] 現在のチェックボックスとストップボタンによるUIから、Generate ForeverボタンとCancel ForeverボタンでGenerate ForeverをコントロールするUIに変更する
 - [x] Generate Forever中にautoplayのチェックを外すと次のファイルからキューに追加しない
 
+## Phase 9: キュー再生の不具合・UI改善
+- [x] キュー再生プレイヤーで音声が404エラーになる問題を修正（`allowed_paths` の追加）
+- [x] キュー再生プレイヤーを直近の生成結果より上に配置
+
 ## Phase : 
 
 
