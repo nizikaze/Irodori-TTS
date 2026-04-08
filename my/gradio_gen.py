@@ -141,8 +141,8 @@ _QUEUE_PLAYBACK_JS = f"""
     let isPlaying = false;
     // currentSrc: 現在再生中（または最後に設定された）音声の URL
     let currentSrc = null;
-    // MAX_QUEUE_SIZE: キューの最大サイズ（Python 側の定数と同じ値）
-    const MAX_QUEUE_SIZE = {{_MAX_QUEUE_SIZE}};
+    // MAX_QUEUE_SIZE: キューの最大サイズ
+    const MAX_QUEUE_SIZE = {_MAX_QUEUE_SIZE};
 
     /**
      * キューインジケーターの表示を更新する。
@@ -169,15 +169,12 @@ _QUEUE_PLAYBACK_JS = f"""
 
     /**
      * 指定された <audio> 要素で音声を再生する。
-     * @param {{HTMLAudioElement}} audioEl - 再生対象の audio 要素
-     * @param {{string}} src - 再生する音声の URL
      */
     function playAudio(audioEl, src) {{
         isPlaying = true;
         currentSrc = src;
         audioEl.src = src;
         audioEl.play().catch(function(e) {{
-            // ブラウザのAutoplay Policyによりブロックされた場合のフォールバック
             console.warn('[queue-playback] play() blocked:', e.message);
             isPlaying = false;
             updateIndicator();
@@ -186,13 +183,35 @@ _QUEUE_PLAYBACK_JS = f"""
     }}
 
     /**
+     * DOM ツリー（Shadow DOM を含む）から最も適切な再生用 <audio> 要素を探す
+     */
+    function getRealAudioElement(root) {{
+        if (!root) return null;
+        
+        // 1. シャドウ DOM を持つ要素を再帰的に探す
+        const allNodes = (root.querySelectorAll ? root.querySelectorAll('*') : []);
+        for (let i = 0; i < allNodes.length; i++) {{
+            if (allNodes[i].shadowRoot) {{
+                const shadowAudio = getRealAudioElement(allNodes[i].shadowRoot);
+                if (shadowAudio) return shadowAudio;
+            }}
+        }}
+        
+        // 2. 通常の <audio> を探し、隠し（hidden）でないものを返す
+        const audios = (root.querySelectorAll ? root.querySelectorAll('audio') : []);
+        for (let i = 0; i < audios.length; i++) {{
+            if (!audios[i].hasAttribute('hidden')) {{
+                return audios[i];
+            }}
+        }}
+        
+        // 3. なければ最初のものをとりあえず返す
+        return audios.length > 0 ? audios[0] : null;
+    }}
+
+    /**
      * #audio-0 コンポーネント内の <audio> 要素を監視し、
      * src 変更時のキュー制御と ended イベントの処理をセットアップする。
-     *
-     * Why MutationObserver を使うか:
-     *   Gradio は yield のたびに DOM を再構築することがある。
-     *   <audio> 要素自体が置き換わる可能性があるため、常に監視して
-     *   新しい <audio> 要素にもイベントリスナーを付け直す必要がある。
      */
     function setupQueuePlayback() {{
         const container = document.getElementById('audio-0');
@@ -205,41 +224,30 @@ _QUEUE_PLAYBACK_JS = f"""
         // 現在リスナーを付けている <audio> 要素を追跡
         let trackedAudio = null;
 
-        /**
-         * <audio> 要素にイベントリスナーを設定する。
-         * @param {{HTMLAudioElement}} audioEl - 対象の audio 要素
-         */
         function attachListeners(audioEl) {{
-            if (trackedAudio === audioEl) return; // 既にアタッチ済み
+            if (trackedAudio === audioEl) return;
             trackedAudio = audioEl;
 
-            // ended: 再生が最後まで到達したときに発火するブラウザ標準イベント
             audioEl.addEventListener('ended', function() {{
                 console.log('[queue-playback] ended event fired');
                 if (audioQueue.length > 0) {{
-                    // キューに次がある場合: 先頭を取り出して再生
                     const nextSrc = audioQueue.shift();
                     console.log('[queue-playback] playing next from queue, remaining:', audioQueue.length);
                     updateIndicator();
                     playAudio(audioEl, nextSrc);
                 }} else {{
-                    // キューが空の場合: 再生終了
                     isPlaying = false;
                     console.log('[queue-playback] queue empty, idle');
                     updateIndicator();
                 }}
             }});
 
-            // pause: ユーザーが手動で一時停止した場合
             audioEl.addEventListener('pause', function() {{
-                // ended ではなくユーザー操作による pause の場合
-                // （ended の直前にも pause は発火するが、ended 側で処理済み）
                 if (!audioEl.ended) {{
                     console.log('[queue-playback] paused by user');
                 }}
             }});
 
-            // play: 再生開始時（ユーザー操作またはautoplay）
             audioEl.addEventListener('play', function() {{
                 isPlaying = true;
                 currentSrc = audioEl.src;
@@ -247,26 +255,19 @@ _QUEUE_PLAYBACK_JS = f"""
             }});
         }}
 
-        /**
-         * コンテナ内の <audio> 要素を探してリスナーを設定する。
-         * audio の src が変わった場合のキュー制御も行う。
-         */
         function checkAndSetup() {{
-            // Gradio 6.x では <audio> は shadow DOM ではなく通常の子要素
-            const audioEl = container.querySelector('audio');
+            // Shadow DOMを含め、表示されている実際の再生要素を取得する
+            const audioEl = getRealAudioElement(container);
             if (!audioEl) return;
 
             attachListeners(audioEl);
 
-            // src が変わった && 再生中の場合: キューに積む
             const newSrc = audioEl.src;
             if (newSrc && newSrc !== currentSrc && newSrc !== '' && !newSrc.endsWith('/')) {{
                 if (isPlaying) {{
-                    // 再生中 → autoplay を除去してキューに追加
                     audioEl.removeAttribute('autoplay');
                     audioEl.pause();
 
-                    // キューが上限を超えた場合は古いものを破棄
                     if (audioQueue.length >= MAX_QUEUE_SIZE) {{
                         const dropped = audioQueue.shift();
                         console.log('[queue-playback] queue full, dropped oldest:', dropped);
@@ -275,13 +276,9 @@ _QUEUE_PLAYBACK_JS = f"""
                     console.log('[queue-playback] queued:', newSrc, 'queue size:', audioQueue.length);
                     updateIndicator();
 
-                    // 元の再生中の音声に戻す
-                    // Why: Gradio が src を新しいものに上書きしてしまうため、
-                    //      再生中の音声を復元して中断を防ぐ
                     audioEl.src = currentSrc;
                     audioEl.play().catch(function() {{}});
                 }} else {{
-                    // 再生中でない → そのまま再生させる（autoplay に任せる）
                     currentSrc = newSrc;
                     isPlaying = true;
                     console.log('[queue-playback] new audio, auto-playing:', newSrc);
@@ -290,27 +287,24 @@ _QUEUE_PLAYBACK_JS = f"""
             }}
         }}
 
-        // MutationObserver: DOM の変更を監視する仕組み
-        // #audio-0 の子要素や属性が変わるたびに checkAndSetup を呼ぶ
         const observer = new MutationObserver(function(mutations) {{
-            // 少し遅延させて Gradio の DOM 更新が完了するのを待つ
             setTimeout(checkAndSetup, 50);
         }});
 
         observer.observe(container, {{
-            childList: true,   // 子要素の追加・削除を監視
-            subtree: true,     // 孫要素以下も含めて監視
-            attributes: true,  // 属性の変更を監視
-            attributeFilter: ['src']  // src 属性の変更のみを対象
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src']
         }});
 
-        // 初回チェック
+        // シャドウDOM内の src 変更を確実にとらえるため、定期的な監視も併用する
+        setInterval(checkAndSetup, 500);
+
         checkAndSetup();
         console.log('[queue-playback] initialized, observing #audio-0');
     }}
 
-    // ページ読み込み完了後にセットアップを開始
-    // Why: Gradio の DOM 構築が完了してから audio 要素を探す必要がある
     if (document.readyState === 'loading') {{
         document.addEventListener('DOMContentLoaded', function() {{
             setTimeout(setupQueuePlayback, 1000);
