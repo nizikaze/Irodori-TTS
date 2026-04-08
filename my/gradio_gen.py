@@ -6,7 +6,7 @@ Irodori-TTS 独自生成UI（Gradio）。
 - ファイル名規則を {YYYYMMDD_HHMMSS}_{seed}.wav に変更
 - 直近5件の履歴表示（Audio×5）
 - autoplay ON/OFF トグル
-- generate_forever モード（チェックONで連続生成）
+- Generate Forever / Cancel Forever ボタンによる連続生成制御
 - 生成完了時に DB へ書き込み
 - キュー再生（再生中に新しい音声が来ても中断せずキューに積む）
 
@@ -65,220 +65,48 @@ _MAX_QUEUE_SIZE = 10
 # グローバルな停止フラグ管理用（session_hash -> 停止要求）
 _session_stop_flags: dict[str, bool] = {}
 
+# --------------------------------------------------------------------------- #
+#  セッションごとの autoplay フラグ管理
+#
+#  Why: Gradio のジェネレータ関数は、inputs を関数呼び出し時に一度だけ評価する。
+#       そのため Generate Forever のループ中に UI 上の autoplay チェックボックスを
+#       変更しても、ジェネレータ内の autoplay 引数は最初の値のまま変わらない。
+#       この問題を解決するため、autoplay の変更イベントでグローバル変数を更新し、
+#       ジェネレータのループ内からそのフラグをリアルタイムに参照する。
+# --------------------------------------------------------------------------- #
+_session_autoplay_flags: dict[str, bool] = {}
+
 # 生成した wav を保存するディレクトリ
 _OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "outputs"
 
 # --------------------------------------------------------------------------- #
-#  キュー再生用カスタム JavaScript
+#  Generate Forever 稼働中に表示するアニメーションスピナーの HTML/CSS
 #
-#  Why: gr.Audio は HTML5 の <audio> 要素の ended イベントを Python 側に
-#       通知する仕組みを持っていない。そのため、再生中に新しい音声が来たとき
-#       「現在の再生を中断せずキューに積み、再生完了後に次を再生する」という
-#       キュー再生を実現するには、ブラウザ側の JavaScript で制御する必要がある。
-#
-#  仕組み:
-#       1. gr.Blocks(head=...) で <script> タグを注入する
-#       2. MutationObserver で #audio-0 内の <audio> 要素の src 変更を監視
-#       3. 再生中に新しい src が来たら autoplay 属性を除去しキューに積む
-#       4. ended イベントで次のキューアイテムを再生
-#       5. キューの状態をインジケーター (#queue-indicator) に表示
-#
-#  注意:
-#       - Gradio の DOM 構造に依存するため、バージョンアップで壊れる可能性がある
-#       - autoplay OFF 時は Python 側が autoplay 属性を設定しないため、
-#         JS のキューには積まれない（従来と同じ動作）
+#  Why: Generate Forever が動いていることをユーザーに視覚的に伝えるため。
+#       CSSアニメーション（回転）で動くスピナーを生成ボタンの近くに表示する。
+#       Gradio の gr.HTML で注入し、visible の切り替えで表示/非表示を制御する。
 # --------------------------------------------------------------------------- #
-_QUEUE_PLAYBACK_JS = f"""
-<script>
-(function() {{
-    'use strict';
-
-    // --- キュー管理の状態 ---
-    // audioQueue: 再生待ちの音声 URL を格納する配列（FIFO）
-    const audioQueue = [];
-    // isPlaying: 現在 <audio> 要素で再生中かどうか
-    let isPlaying = false;
-    // currentSrc: 現在再生中（または最後に設定された）音声の URL
-    let currentSrc = null;
-    // MAX_QUEUE_SIZE: キューの最大サイズ（Python 側の定数と同じ値）
-    const MAX_QUEUE_SIZE = {_MAX_QUEUE_SIZE};
-
-    /**
-     * キューインジケーターの表示を更新する。
-     * #queue-indicator という要素が存在すれば、キュー内のアイテム数を表示する。
-     */
-    function updateIndicator() {{
-        const el = document.getElementById('queue-indicator');
-        if (!el) return;
-        // textarea 要素を探す（Gradio の Textbox は内部的に textarea を使う）
-        const textarea = el.querySelector('textarea');
-        if (textarea) {{
-            const count = audioQueue.length;
-            // Gradio の input イベントをシミュレートして値を反映
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                window.HTMLTextAreaElement.prototype, 'value'
-            ).set;
-            nativeInputValueSetter.call(
-                textarea,
-                count > 0 ? 'キュー: ' + count + '件待ち' : ''
-            );
-            textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        }}
-    }}
-
-    /**
-     * 指定された <audio> 要素で音声を再生する。
-     * @param {{HTMLAudioElement}} audioEl - 再生対象の audio 要素
-     * @param {{string}} src - 再生する音声の URL
-     */
-    function playAudio(audioEl, src) {{
-        isPlaying = true;
-        currentSrc = src;
-        audioEl.src = src;
-        audioEl.play().catch(function(e) {{
-            // ブラウザのAutoplay Policyによりブロックされた場合のフォールバック
-            console.warn('[queue-playback] play() blocked:', e.message);
-            isPlaying = false;
-            updateIndicator();
-        }});
-        console.log('[queue-playback] playing:', src);
-    }}
-
-    /**
-     * #audio-0 コンポーネント内の <audio> 要素を監視し、
-     * src 変更時のキュー制御と ended イベントの処理をセットアップする。
-     *
-     * Why MutationObserver を使うか:
-     *   Gradio は yield のたびに DOM を再構築することがある。
-     *   <audio> 要素自体が置き換わる可能性があるため、常に監視して
-     *   新しい <audio> 要素にもイベントリスナーを付け直す必要がある。
-     */
-    function setupQueuePlayback() {{
-        const container = document.getElementById('audio-0');
-        if (!container) {{
-            console.warn('[queue-playback] #audio-0 not found, retrying...');
-            setTimeout(setupQueuePlayback, 500);
-            return;
-        }}
-
-        // 現在リスナーを付けている <audio> 要素を追跡
-        let trackedAudio = null;
-
-        /**
-         * <audio> 要素にイベントリスナーを設定する。
-         * @param {{HTMLAudioElement}} audioEl - 対象の audio 要素
-         */
-        function attachListeners(audioEl) {{
-            if (trackedAudio === audioEl) return; // 既にアタッチ済み
-            trackedAudio = audioEl;
-
-            // ended: 再生が最後まで到達したときに発火するブラウザ標準イベント
-            audioEl.addEventListener('ended', function() {{
-                console.log('[queue-playback] ended event fired');
-                if (audioQueue.length > 0) {{
-                    // キューに次がある場合: 先頭を取り出して再生
-                    const nextSrc = audioQueue.shift();
-                    console.log('[queue-playback] playing next from queue, remaining:', audioQueue.length);
-                    updateIndicator();
-                    playAudio(audioEl, nextSrc);
-                }} else {{
-                    // キューが空の場合: 再生終了
-                    isPlaying = false;
-                    console.log('[queue-playback] queue empty, idle');
-                    updateIndicator();
-                }}
-            }});
-
-            // pause: ユーザーが手動で一時停止した場合
-            audioEl.addEventListener('pause', function() {{
-                // ended ではなくユーザー操作による pause の場合
-                // （ended の直前にも pause は発火するが、ended 側で処理済み）
-                if (!audioEl.ended) {{
-                    console.log('[queue-playback] paused by user');
-                }}
-            }});
-
-            // play: 再生開始時（ユーザー操作またはautoplay）
-            audioEl.addEventListener('play', function() {{
-                isPlaying = true;
-                currentSrc = audioEl.src;
-                console.log('[queue-playback] play started');
-            }});
-        }}
-
-        /**
-         * コンテナ内の <audio> 要素を探してリスナーを設定する。
-         * audio の src が変わった場合のキュー制御も行う。
-         */
-        function checkAndSetup() {{
-            // Gradio 6.x では <audio> は shadow DOM ではなく通常の子要素
-            const audioEl = container.querySelector('audio');
-            if (!audioEl) return;
-
-            attachListeners(audioEl);
-
-            // src が変わった && 再生中の場合: キューに積む
-            const newSrc = audioEl.src;
-            if (newSrc && newSrc !== currentSrc && newSrc !== '' && !newSrc.endsWith('/')) {{
-                if (isPlaying) {{
-                    // 再生中 → autoplay を除去してキューに追加
-                    audioEl.removeAttribute('autoplay');
-                    audioEl.pause();
-
-                    // キューが上限を超えた場合は古いものを破棄
-                    if (audioQueue.length >= MAX_QUEUE_SIZE) {{
-                        const dropped = audioQueue.shift();
-                        console.log('[queue-playback] queue full, dropped oldest:', dropped);
-                    }}
-                    audioQueue.push(newSrc);
-                    console.log('[queue-playback] queued:', newSrc, 'queue size:', audioQueue.length);
-                    updateIndicator();
-
-                    // 元の再生中の音声に戻す
-                    // Why: Gradio が src を新しいものに上書きしてしまうため、
-                    //      再生中の音声を復元して中断を防ぐ
-                    audioEl.src = currentSrc;
-                    audioEl.play().catch(function() {{}});
-                }} else {{
-                    // 再生中でない → そのまま再生させる（autoplay に任せる）
-                    currentSrc = newSrc;
-                    isPlaying = true;
-                    console.log('[queue-playback] new audio, auto-playing:', newSrc);
-                    updateIndicator();
-                }}
-            }}
-        }}
-
-        // MutationObserver: DOM の変更を監視する仕組み
-        // #audio-0 の子要素や属性が変わるたびに checkAndSetup を呼ぶ
-        const observer = new MutationObserver(function(mutations) {{
-            // 少し遅延させて Gradio の DOM 更新が完了するのを待つ
-            setTimeout(checkAndSetup, 50);
-        }});
-
-        observer.observe(container, {{
-            childList: true,   // 子要素の追加・削除を監視
-            subtree: true,     // 孫要素以下も含めて監視
-            attributes: true,  // 属性の変更を監視
-            attributeFilter: ['src']  // src 属性の変更のみを対象
-        }});
-
-        // 初回チェック
-        checkAndSetup();
-        console.log('[queue-playback] initialized, observing #audio-0');
-    }}
-
-    // ページ読み込み完了後にセットアップを開始
-    // Why: Gradio の DOM 構築が完了してから audio 要素を探す必要がある
-    if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', function() {{
-            setTimeout(setupQueuePlayback, 1000);
-        }});
-    }} else {{
-        setTimeout(setupQueuePlayback, 1000);
-    }}
-}})()
-</script>
+_FOREVER_SPINNER_HTML = """
+<div style="display: flex; align-items: center; gap: 8px; padding: 4px 0;">
+    <div style="
+        width: 20px;
+        height: 20px;
+        border: 3px solid rgba(124, 58, 237, 0.2);
+        border-top-color: #7c3aed;
+        border-radius: 50%;
+        animation: forever-spin 0.8s linear infinite;
+    "></div>
+    <span style="
+        font-size: 14px;
+        font-weight: 600;
+        color: #7c3aed;
+    ">Generate Forever 実行中…</span>
+</div>
+<style>
+    @keyframes forever-spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
 """
 
 
@@ -320,13 +148,14 @@ def _run_generation(
 
     Args:
         checkpoint〜rescale_sigma_raw: サンプリング関連パラメータ（本家と同等）
-        autoplay:      最新音声を自動再生するかどうか
-        forever:       連続生成モードかどうか
+        autoplay:      最新音声を自動再生するかどうか（初回値、以降はセッション変数を参照）
+        forever:       連続生成モードかどうか（ボタンに応じて固定値が渡される）
         history_paths: 直近5件の wav パスリスト（gr.State から受け取る）
         request:       Gradio のリクエスト情報（セッション管理用）
 
     Yields:
-        tuple: (Audio×5 の更新, ログ文字列, タイミング文字列, 更新後の history_paths)
+        tuple: (Audio×5 の更新, ログ文字列, タイミング文字列,
+                更新後の history_paths, スピナー表示状態)
     """
 
     def stdout_log(msg: str) -> None:
@@ -366,6 +195,14 @@ def _run_generation(
     # セッションIDを取得・フラグをリセット
     session_id = request.session_hash if request else "default"
     _session_stop_flags[session_id] = False
+
+    # autoplay の初期値をセッション変数にも反映
+    # Why: ジェネレータ起動前のチェックボックス状態を保持する
+    _session_autoplay_flags[session_id] = autoplay
+
+    # forever モード開始時にスピナーを表示
+    if forever:
+        stdout_log(f"[my-gen] Generate Forever started (session: {session_id})")
 
     # --- 生成ループ（forever=False なら1回で終了） ---
     # Why: while True + break で「最低1回は実行」を保証しつつ、
@@ -468,6 +305,13 @@ def _run_generation(
         detail_text = "\n".join(detail_lines)
         timing_text = _format_timings(result.stage_timings, result.total_to_decode)
 
+        # --- autoplay をリアルタイムに参照 ---
+        # Why: Generate Forever ループ中に autoplay チェックボックスが変更された場合、
+        #      セッション変数から最新の値を取得する。
+        #      autoplay OFF にすると、次の生成から autoplay 属性を付与しない
+        #      （= キュー再生にも追加されない）。
+        current_autoplay = _session_autoplay_flags.get(session_id, autoplay)
+
         # --- Audio×5 の更新を組み立て ---
         # Why: gr.update() だと autoplay=False を送ってもブラウザ側の <audio> 要素に
         #      autoplay 属性が残留してしまう問題がある。gr.Audio() コンストラクタ形式で
@@ -481,7 +325,7 @@ def _run_generation(
         audio_updates: list[gr.Audio] = []
         for i in range(_MAX_HISTORY):
             if i < len(history_paths):
-                should_autoplay = autoplay and i == 0
+                should_autoplay = current_autoplay and i == 0
                 # autoplay は最新の1件（i==0）かつ autoplay=True の場合のみ有効
                 # autoplay=False の場合はキーワード自体を渡さず、属性残留を防ぐ
                 if should_autoplay:
@@ -502,12 +346,19 @@ def _run_generation(
             else:
                 audio_updates.append(gr.Audio(value=None, visible=False))
 
-        yield (*audio_updates, detail_text, timing_text, history_paths)
+        # スピナーの表示状態を決定
+        # Why: Forever モード中はスピナーを表示し続け、終了時にのみ非表示にする。
+        #      ここではまだループ中なので forever なら visible のまま。
+        #      ループを抜けた後（関数終了時）にスピナーは非表示にしたいが、
+        #      ジェネレータの最後の yield がそれを担う。
+        spinner_visible = forever
+
+        yield (*audio_updates, detail_text, timing_text, history_paths, gr.update(visible=spinner_visible))
 
         # forever=False なら1回で終了
         if not forever:
             break
-            
+
         # 停止要求があれば1回出力した後でもBreak
         if _session_stop_flags.get(session_id, False):
             stdout_log(f"[my-gen] Generation stopped by user after yield (session: {session_id})")
@@ -518,6 +369,16 @@ def _run_generation(
         #      連続生成時はランダムシードに切り替える
         seed = None
 
+    # --- ループ終了後: スピナーを確実に非表示にする ---
+    # Why: 停止ボタンやエラーでループを抜けた場合でも、スピナーを非表示にする。
+    #      最後の yield でスピナーを非表示にすることで、UIが正しい状態に戻る。
+    if forever:
+        stdout_log(f"[my-gen] Generate Forever ended (session: {session_id})")
+        # 最後に Audio は変更せず、スピナーだけ非表示にする更新を yield
+        # 各 Audio は現在の状態を維持（gr.update() で何も変えない）
+        no_change_audios = [gr.update() for _ in range(_MAX_HISTORY)]
+        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False))
+
 
 def build_ui() -> gr.Blocks:
     """
@@ -526,7 +387,9 @@ def build_ui() -> gr.Blocks:
     本家 build_ui() との主な差分:
     - 候補グリッド（32枠）を廃止し、直近5件の履歴表示に置き換え
     - autoplay トグルを追加
-    - Forever（連続生成）チェックボックスを追加
+    - Generate Forever / Cancel Forever ボタンで連続生成を制御
+      （旧 Forever チェックボックス + Stop ボタンを廃止）
+    - Generate Forever 中にスピナーアイコンを表示
     - num_candidates スライダーを削除
     """
     default_checkpoint = _default_checkpoint()
@@ -640,14 +503,32 @@ def build_ui() -> gr.Blocks:
                 rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value="")
 
         # --- 生成制御 ---
+        # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
+        #      ボタン3つで制御する。旧 Forever チェックボックス + Stop ボタンを廃止。
+        #      Generate Forever 中はスピナーアイコンを表示して稼働中であることを示す。
         with gr.Row():
             generate_btn = gr.Button("Generate", variant="primary", scale=3)
+            generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
+            cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
             # autoplay: 最新の1件を自動再生するかの切り替え
             autoplay = gr.Checkbox(label="Autoplay", value=True, scale=1)
-            # forever: ONにすると停止ボタンを押すまで連続生成する
-            forever = gr.Checkbox(label="Forever", value=False, scale=1)
-            # Gradio の .click() で連続生成を止めるための停止ボタン
-            stop_btn = gr.Button("Stop", variant="stop", scale=1)
+
+        # --- Generate Forever 稼働中のスピナー表示 ---
+        # Why: Generate Forever が動いていることを視覚的に分かりやすくするため、
+        #      生成ボタンの近くにアニメーション付きスピナーを配置する。
+        #      初期状態では非表示で、Generate Forever 開始時に visible=True にする。
+        forever_spinner = gr.HTML(
+            value=_FOREVER_SPINNER_HTML,
+            visible=False,
+        )
+
+        # --- forever フラグ用の固定値 State ---
+        # Why: Generate ボタンと Generate Forever ボタンで同じ _run_generation 関数を
+        #      使い回すため、forever パラメータを gr.State の固定値として渡す。
+        #      Generate ボタン → forever=False（1回生成）
+        #      Generate Forever ボタン → forever=True（連続生成）
+        forever_false = gr.State(False)
+        forever_true = gr.State(True)
 
         # --- 直近5件の履歴表示 ---
         # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
@@ -687,14 +568,21 @@ def build_ui() -> gr.Blocks:
         out_log = gr.Textbox(label="Run Log", lines=6)
         out_timing = gr.Textbox(label="Timing", lines=6)
 
-        # --- イベントバインド ---
+        # --- 共通の入力リスト ---
+        # Why: Generate ボタンと Generate Forever ボタンで共通する入力パラメータを
+        #      まとめて定義し、コードの重複を避ける。
+        #      forever パラメータだけがボタンごとに異なる。
+        def _make_inputs(forever_state: gr.State) -> list:
+            """
+            ボタンごとに異なる forever State を含む入力リストを生成する。
 
-        # 生成ボタンクリック時
-        # Why: _run_generation はジェネレータ関数なので、Gradio は yield ごとに
-        #      UI を逐次更新する。forever=True の場合は停止ボタンで中断できる。
-        generate_btn.click(
-            _run_generation,
-            inputs=[
+            Args:
+                forever_state: gr.State(False) または gr.State(True)
+
+            Returns:
+                list: _run_generation に渡す入力コンポーネントのリスト
+            """
+            return [
                 checkpoint,
                 model_device,
                 model_precision,
@@ -718,22 +606,70 @@ def build_ui() -> gr.Blocks:
                 rescale_k_raw,
                 rescale_sigma_raw,
                 autoplay,
-                forever,
+                forever_state,
                 history_state,
-            ],
-            outputs=[*out_audios, out_log, out_timing, history_state],
+            ]
+
+        # 出力リスト（Audio×5 + ログ + タイミング + 履歴State + スピナー）
+        gen_outputs = [*out_audios, out_log, out_timing, history_state, forever_spinner]
+
+        # --- イベントバインド ---
+
+        # Generate ボタン: 1回だけ生成（forever=False）
+        # Why: _run_generation はジェネレータ関数なので、Gradio は yield ごとに
+        #      UI を逐次更新する。forever=False なら1回で終了する。
+        generate_btn.click(
+            _run_generation,
+            inputs=_make_inputs(forever_false),
+            outputs=gen_outputs,
+        )
+
+        # Generate Forever ボタン: 連続生成（forever=True）
+        # Why: forever=True の固定値を渡すことで、ジェネレータが停止要求まで
+        #      ループし続ける。スピナーは _run_generation 内で制御される。
+        generate_forever_btn.click(
+            _run_generation,
+            inputs=_make_inputs(forever_true),
+            outputs=gen_outputs,
         )
 
         def _handle_stop(req: gr.Request):
-            """停止フラグを立てて現在の処理が終わり次第ループを抜ける"""
+            """
+            停止フラグを立てて現在の処理が終わり次第ループを抜ける。
+            Cancel Forever ボタンから呼ばれる。
+            """
             sid = req.session_hash if req else "default"
             _session_stop_flags[sid] = True
             return "※停止要求を受け付けました。現在の生成が完了すると停止します。"
 
-        # 停止ボタン: generate_forever のジェネレータループを中断する
+        # Cancel Forever ボタン: Generate Forever のジェネレータループを中断する
         # Why: queue=False にすることで順次処理キューをバイパスし、即座にフラグを立てる。
         #      cancels=[] を使うと UI 全体がエラー表示になってしまう問題を回避するため。
-        stop_btn.click(fn=_handle_stop, inputs=[], outputs=[out_log], queue=False)
+        cancel_forever_btn.click(fn=_handle_stop, inputs=[], outputs=[out_log], queue=False)
+
+        def _handle_autoplay_change(value: bool, req: gr.Request):
+            """
+            autoplay チェックボックスの変更をセッション変数に反映する。
+
+            Why: Generate Forever ループ中に autoplay を OFF にした場合、
+                 次の生成から autoplay 属性を付与しないようにするため。
+                 ジェネレータの inputs は起動時に一度だけ評価されるので、
+                 ループ中の変更はこのイベントハンドラ経由でしか取得できない。
+            """
+            sid = req.session_hash if req else "default"
+            _session_autoplay_flags[sid] = value
+            stdout_msg = "ON" if value else "OFF"
+            print(f"[my-gen] autoplay changed to {stdout_msg} (session: {sid})", flush=True)
+
+        # autoplay チェックボックスの変更イベント
+        # Why: queue=False で即座に反映し、Generate Forever ループ中でも
+        #      次の生成から autoplay の ON/OFF が反映されるようにする。
+        autoplay.change(
+            fn=_handle_autoplay_change,
+            inputs=[autoplay],
+            outputs=[],
+            queue=False,
+        )
 
         # デバイス変更時に精度選択肢を動的更新
         model_device.change(

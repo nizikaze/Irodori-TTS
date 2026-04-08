@@ -61,8 +61,7 @@ python -m my.gradio_gen
 - **候補グリッド廃止**: 常に1件ずつ生成（32枠のグリッドなし）
 - **履歴表示**: 直近5件の生成結果を画面上部に表示
 - **Autoplay**: ONにすると最新の生成結果を自動再生
-- **キュー再生**: Autoplay ON 時、再生中に新しい音声が来ても中断せずキューに積み、再生完了後に順次再生
-- **Forever モード**: チェックONで停止ボタンを押すまで連続生成
+- **Forever モード**: 「Generate Forever」ボタンで連続生成、「Cancel Forever」ボタンで停止。稼働中はスピナーアイコンが表示される
 - **DB 記録**: 生成のたびに SQLite に履歴を保存（`my/data/generations.db`）
 - **ファイル名**: `{YYYYMMDD_HHMMSS}_{seed}.wav` 形式で `my/data/outputs/` に保存
 
