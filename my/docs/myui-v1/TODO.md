@@ -63,6 +63,13 @@
 - [ ] キュー再生（再生中に新しいものが追加されても現在の再生を中断せずキューに積む）
   - 注: `gr.Audio` は `ended` イベントを持たないため、カスタムJSが必要
 
+## Phase 8: Generate Foreverに関する挙動をEasyReforgeに寄せる
+- [ ] Generate Forever中であることがわかりやすいように、生成ボタンの近くにGenerate Forever中だけ動くアイコンを設置
+- [ ] 現在のチェックボックスとストップボタンによるUIから、Generate ForeverボタンとCancel ForeverボタンでGenerate ForeverをコントロールするUIに変更する
+- [ ] Generate Forever中にautoplayのチェックを外すと次のファイルからキューに追加しない
+
+## Phase : 
+
 
 ## Phase X: 将来実装（タグ）
 
