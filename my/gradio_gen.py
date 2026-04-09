@@ -135,14 +135,44 @@ _QUEUE_PLAYBACK_JS = f"""
     window.enqueueAudio = function(url) {{
         if (!url) return;
         
-        window._queueAudioList.push(url);
-        console.log('[queue-playback] queued:', url, 'size:', window._queueAudioList.length);
+        let name = "Audio";
+        try {{
+            let parts = url.split("?")[0].split("/");
+            name = parts[parts.length - 1] || "Audio";
+        }} catch(e) {{}}
+
+        // 新しいものを先頭に追加 (生成順の降順)
+        window._queueAudioList.unshift({{ url: url, name: name }});
+        console.log('[queue-playback] queued:', name, 'size:', window._queueAudioList.length);
         window.updateQueueUI();
         
         // If not currently playing and not forcibly paused by user, start now
         if (!window._isQueuePlaying && !window._queueForcePaused) {{
             window.playNextInQueue();
         }}
+    }};
+
+    /**
+     * キューリストから指定のアイテムを再生する。
+     */
+    window.playSpecificQueueItem = function(index) {{
+        const audioEl = document.getElementById('queue-audio');
+        if (!audioEl) return;
+        
+        if (index >= 0 && index < window._queueAudioList.length) {{
+            let item = window._queueAudioList.splice(index, 1)[0];
+            
+            window._isQueuePlaying = true;
+            window._queueForcePaused = false;
+            audioEl.src = item.url;
+            audioEl.play().catch(function(e) {{
+                console.warn('[queue-playback] play() blocked:', e.message);
+                window._isQueuePlaying = false;
+                window.updateQueueUI();
+            }});
+            console.log('[queue-playback] playing specific:', item.name);
+        }}
+        window.updateQueueUI();
     }};
 
     /**
@@ -153,22 +183,23 @@ _QUEUE_PLAYBACK_JS = f"""
         if (!audioEl) return;
         
         if (window._queueAudioList.length > 0) {{
-            let url = window._queueAudioList.shift();
+            // unshift で先頭に追加しているため、一番古いものは末尾(pop)
+            let item = window._queueAudioList.pop();
             
             // max queue size limit
             while (window._queueAudioList.length > MAX_QUEUE_SIZE) {{
-                window._queueAudioList.shift();
+                window._queueAudioList.pop(); // 古いものから捨てる
             }}
 
             window._isQueuePlaying = true;
             window._queueForcePaused = false;
-            audioEl.src = url;
+            audioEl.src = item.url;
             audioEl.play().catch(function(e) {{
                 console.warn('[queue-playback] play() blocked:', e.message);
                 window._isQueuePlaying = false;
                 window.updateQueueUI();
             }});
-            console.log('[queue-playback] playing:', url);
+            console.log('[queue-playback] playing next:', item.name);
         }} else {{
             window._isQueuePlaying = false;
             console.log('[queue-playback] queue empty, idle');
@@ -182,9 +213,11 @@ _QUEUE_PLAYBACK_JS = f"""
     window.updateQueueUI = function() {{
         const container = document.getElementById('queue-player-container');
         const badge = document.getElementById('queue-count-badge');
+        const queueListContainer = document.getElementById('queue-list-container');
+        const queueUl = document.getElementById('queue-list');
+        
         if (!container || !badge) return;
         
-        // Always show the player if there's anything playing, forced paused, or waiting
         if (window._isQueuePlaying || window._queueForcePaused || window._queueAudioList.length > 0) {{
             container.style.display = 'block';
         }} else {{
@@ -194,8 +227,51 @@ _QUEUE_PLAYBACK_JS = f"""
         if (window._queueAudioList.length > 0) {{
             badge.style.display = 'inline-block';
             badge.innerText = window._queueAudioList.length;
+            
+            if (queueListContainer && queueUl) {{
+                queueListContainer.style.display = 'block';
+                queueUl.innerHTML = '';
+                
+                window._queueAudioList.forEach(function(item, index) {{
+                    let li = document.createElement('li');
+                    li.style.padding = '5px 8px';
+                    li.style.borderBottom = '1px solid #e5e7eb';
+                    li.style.display = 'flex';
+                    li.style.justifyContent = 'space-between';
+                    li.style.alignItems = 'center';
+                    li.style.transition = 'background-color 0.2s';
+                    li.onmouseover = function() {{ this.style.backgroundColor = '#f3f4f6'; }};
+                    li.onmouseout = function() {{ this.style.backgroundColor = 'transparent'; }};
+                    
+                    let nameSpan = document.createElement('span');
+                    nameSpan.innerText = item.name;
+                    nameSpan.style.wordBreak = 'break-all';
+                    nameSpan.style.marginRight = '10px';
+                    
+                    let playBtn = document.createElement('button');
+                    playBtn.innerText = '再生';
+                    playBtn.style.padding = '4px 12px';
+                    playBtn.style.backgroundColor = '#7c3aed';
+                    playBtn.style.color = 'white';
+                    playBtn.style.border = 'none';
+                    playBtn.style.borderRadius = '4px';
+                    playBtn.style.cursor = 'pointer';
+                    playBtn.style.fontSize = '12px';
+                    playBtn.style.fontWeight = 'bold';
+                    playBtn.style.whiteSpace = 'nowrap';
+                    playBtn.onclick = function() {{
+                        window.playSpecificQueueItem(index);
+                    }};
+                    
+                    li.appendChild(nameSpan);
+                    li.appendChild(playBtn);
+                    queueUl.appendChild(li);
+                }});
+            }}
         }} else {{
             badge.style.display = 'none';
+            if (queueListContainer) queueListContainer.style.display = 'none';
+            if (queueUl) queueUl.innerHTML = '';
         }}
     }};
 }})()
@@ -606,15 +682,18 @@ def build_ui() -> gr.Blocks:
         # Why: 独立した再生プレイヤーでキューを管理するため、コンテナごと表示する。
         #      直近の生成結果より上に配置することで、ユーザーの目に留まりやすくする。
         gr.HTML("""
-        <div id="queue-player-container" style="display:none; padding: 10px; background: #f3f4f6; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 15px;">
-            <div style="font-size:14px; font-weight:bold; margin-bottom:5px; color: #374151;">
+        <div id="queue-player-container" style="display:none; padding: 10px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 15px;">
+            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: #374151;">
                 ▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span>
             </div>
-            <audio id="queue-audio" controls style="width: 100%;" 
+            <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;" 
                 onended="if(window.playNextInQueue) window.playNextInQueue()"
                 onplay="window._isQueuePlaying = true; window._queueForcePaused = false; if(window.updateQueueUI) window.updateQueueUI()"
                 onpause="if(!this.ended){ window._queueForcePaused = true; window._isQueuePlaying = false; if(window.updateQueueUI) window.updateQueueUI(); }"
             ></audio>
+            <div id="queue-list-container" style="display:none; max-height: 180px; overflow-y: auto; background: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);">
+                <ul id="queue-list" style="list-style: none; padding: 0; margin: 0; font-size: 13px; color: #374151;"></ul>
+            </div>
         </div>
         """)
         
