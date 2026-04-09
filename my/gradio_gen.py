@@ -581,9 +581,9 @@ def build_ui() -> gr.Blocks:
         with gr.Row():
             generate_btn = gr.Button("Generate", variant="primary", scale=3)
             generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
-            cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
             # autoplay: 最新の1件を自動再生するかの切り替え
             autoplay = gr.Checkbox(label="Autoplay", value=True, scale=1)
+            cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
 
         # --- Generate Forever 稼働中のスピナー表示 ---
         # Why: Generate Forever が動いていることを視覚的に分かりやすくするため、
