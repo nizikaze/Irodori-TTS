@@ -1,3 +1,6 @@
+# Git worktree 作業ディレクトリ
+worktrees/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -219,8 +222,8 @@ outputs/
 gradio_outputs/
 gradio_outputs_voicedesign/
 
-# Git worktree 作業ディレクトリ
-worktrees/
+# GUI設定ファイル
+my/data/last_settings.json
 
 # SQLite DBファイル（環境ごとに生成されるためバージョン管理しない）
 my/data/*.db
