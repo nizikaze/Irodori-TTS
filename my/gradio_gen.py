@@ -154,6 +154,7 @@ _QUEUE_PLAYBACK_JS = f"""
     window._queueAudioList = [];
     window._isQueuePlaying = false;
     window._queueForcePaused = false;
+    window._currentPlayingItem = null; // 現在再生中のアイテムを保持
     const MAX_QUEUE_SIZE = {_MAX_QUEUE_SIZE};
 
     /**
@@ -164,7 +165,9 @@ _QUEUE_PLAYBACK_JS = f"""
         
         let name = "Audio";
         try {{
-            let parts = url.split("?")[0].split("/");
+            // URLデコードし、スラッシュ(/)とバックスラッシュ(\\)の両方で分割して最後の部分を取得する
+            let decodedUrl = decodeURIComponent(url.split("?")[0]);
+            let parts = decodedUrl.split(/[/\\]/);
             name = parts[parts.length - 1] || "Audio";
         }} catch(e) {{}}
 
@@ -191,10 +194,12 @@ _QUEUE_PLAYBACK_JS = f"""
             
             window._isQueuePlaying = true;
             window._queueForcePaused = false;
+            window._currentPlayingItem = item; // 現在の再生アイテムに設定
             audioEl.src = item.url;
             audioEl.play().catch(function(e) {{
                 console.warn('[queue-playback] play() blocked:', e.message);
                 window._isQueuePlaying = false;
+                window._currentPlayingItem = null;
                 window.updateQueueUI();
             }});
             console.log('[queue-playback] playing specific:', item.name);
@@ -220,15 +225,18 @@ _QUEUE_PLAYBACK_JS = f"""
 
             window._isQueuePlaying = true;
             window._queueForcePaused = false;
+            window._currentPlayingItem = item; // 現在の再生アイテムに設定
             audioEl.src = item.url;
             audioEl.play().catch(function(e) {{
                 console.warn('[queue-playback] play() blocked:', e.message);
                 window._isQueuePlaying = false;
+                window._currentPlayingItem = null;
                 window.updateQueueUI();
             }});
             console.log('[queue-playback] playing next:', item.name);
         }} else {{
             window._isQueuePlaying = false;
+            window._currentPlayingItem = null; // キューが空になったらクリア
             console.log('[queue-playback] queue empty, idle');
         }}
         window.updateQueueUI();
@@ -242,13 +250,23 @@ _QUEUE_PLAYBACK_JS = f"""
         const badge = document.getElementById('queue-count-badge');
         const queueListContainer = document.getElementById('queue-list-container');
         const queueUl = document.getElementById('queue-list');
+        const currentPlayingInfo = document.getElementById('current-playing-info');
+        const currentPlayingName = document.getElementById('current-playing-name');
         
         if (!container || !badge) return;
         
-        if (window._isQueuePlaying || window._queueForcePaused || window._queueAudioList.length > 0) {{
+        if (window._isQueuePlaying || window._queueForcePaused || window._queueAudioList.length > 0 || window._currentPlayingItem) {{
             container.style.display = 'block';
         }} else {{
             container.style.display = 'none';
+        }}
+        
+        // 再生中のファイル名表示を更新
+        if (window._currentPlayingItem && currentPlayingInfo && currentPlayingName) {{
+            currentPlayingInfo.style.display = 'block';
+            currentPlayingName.innerText = window._currentPlayingItem.name;
+        }} else if (currentPlayingInfo) {{
+            currentPlayingInfo.style.display = 'none';
         }}
         
         if (window._queueAudioList.length > 0) {{
@@ -752,6 +770,10 @@ def build_ui() -> gr.Blocks:
         <div id="queue-player-container" style="display:none; padding: 10px; background: var(--background-fill-secondary, #f9fafb); border-radius: 8px; border: 1px solid var(--border-color-primary, #e5e7eb); margin-bottom: 15px;">
             <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: var(--body-text-color, #374151);">
                 ▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span>
+            </div>
+            <div id="current-playing-info" style="font-size:13px; margin-bottom:8px; display:none; padding: 6px; background-color: var(--background-fill-primary, #ffffff); border-radius: 4px; border-left: 4px solid #7c3aed;">
+                <span style="color: var(--body-text-color-sub, #6b7280);">現在再生中:</span> 
+                <span id="current-playing-name" style="font-weight:bold; color: var(--body-text-color, #374151); word-break: break-all; margin-left: 4px;"></span>
             </div>
             <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;" 
                 onended="if(window.playNextInQueue) window.playNextInQueue()"
