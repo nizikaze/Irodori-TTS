@@ -167,7 +167,9 @@ _QUEUE_PLAYBACK_JS = f"""
         try {{
             // URLデコードし、スラッシュ(/)とバックスラッシュ(\\)の両方で分割して最後の部分を取得する
             let decodedUrl = decodeURIComponent(url.split("?")[0]);
-            let parts = decodedUrl.split(/[/\\]/);
+            // バックスラッシュをスラッシュに変換してから分割する
+            let normalizedUrl = decodedUrl.split("\\\\").join("/");
+            let parts = normalizedUrl.split("/");
             name = parts[parts.length - 1] || "Audio";
         }} catch(e) {{}}
 
