@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Generator
@@ -78,6 +79,32 @@ _session_autoplay_flags: dict[str, bool] = {}
 
 # 生成した wav を保存するディレクトリ
 _OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "outputs"
+
+# --------------------------------------------------------------------------- #
+#  直近の生成設定を保存・読み込みする機構
+#
+#  Why: UI起動時に前回の設定（テキストやサンプリングパラメータなど）を
+#       復元し、ユーザーが毎回入力し直す手間を省くため。
+# --------------------------------------------------------------------------- #
+_SETTINGS_PATH = Path(__file__).resolve().parent / "data" / "last_settings.json"
+
+def load_last_settings() -> dict:
+    if _SETTINGS_PATH.exists():
+        try:
+            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[my-gen] Failed to load settings: {e}")
+    return {}
+
+def save_last_settings(settings: dict) -> None:
+    _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[my-gen] Failed to save settings: {e}")
+
 
 # --------------------------------------------------------------------------- #
 #  Generate Forever 稼働中に表示するアニメーションスピナーの HTML/CSS
@@ -372,6 +399,33 @@ def _run_generation(
     if forever:
         stdout_log(f"[my-gen] Generate Forever started (session: {session_id})")
 
+    # --- 直近の生成設定を保存 ---
+    settings_to_save = {
+        "checkpoint": str(checkpoint),
+        "model_device": str(model_device),
+        "model_precision": str(model_precision),
+        "codec_device": str(codec_device),
+        "codec_precision": str(codec_precision),
+        "text": text_value,
+        "caption": caption_value,
+        "num_steps": int(num_steps) if str(num_steps).isdigit() else 40,
+        "seed_raw": str(seed_raw),
+        "cfg_guidance_mode": str(cfg_guidance_mode),
+        "cfg_scale_text": float(cfg_scale_text),
+        "cfg_scale_caption": float(cfg_scale_caption),
+        "cfg_scale_raw": str(cfg_scale_raw),
+        "cfg_min_t": float(cfg_min_t),
+        "cfg_max_t": float(cfg_max_t),
+        "context_kv_cache": bool(context_kv_cache),
+        "max_text_len_raw": str(max_text_len_raw),
+        "max_caption_len_raw": str(max_caption_len_raw),
+        "truncation_factor_raw": str(truncation_factor_raw),
+        "rescale_k_raw": str(rescale_k_raw),
+        "rescale_sigma_raw": str(rescale_sigma_raw),
+        "autoplay": bool(autoplay),
+    }
+    save_last_settings(settings_to_save)
+
     # --- 生成ループ（forever=False なら1回で終了） ---
     # Why: while True + break で「最低1回は実行」を保証しつつ、
     #      forever フラグで連続生成に対応する
@@ -547,6 +601,18 @@ def build_ui() -> gr.Blocks:
     model_precision_choices = _precision_choices_for_device(default_model_device)
     codec_precision_choices = _precision_choices_for_device(default_codec_device)
 
+    # 前回の設定を読み込む
+    last_settings = load_last_settings()
+
+    # 必須の選択肢を検証しながら復元
+    saved_model_device = last_settings.get("model_device", default_model_device)
+    if saved_model_device not in device_choices:
+        saved_model_device = default_model_device
+
+    saved_codec_device = last_settings.get("codec_device", default_codec_device)
+    if saved_codec_device not in device_choices:
+        saved_codec_device = default_codec_device
+
     # head: HTML の <head> セクションに注入するカスタム JavaScript
     # キュー再生用の JS をここで読み込む
     with gr.Blocks(title="Irodori-TTS My Generator", head=_QUEUE_PLAYBACK_JS) as demo:
@@ -560,31 +626,31 @@ def build_ui() -> gr.Blocks:
         with gr.Row():
             checkpoint = gr.Textbox(
                 label="Checkpoint (.pt/.safetensors or HF repo id)",
-                value=default_checkpoint,
+                value=last_settings.get("checkpoint", default_checkpoint),
                 scale=4,
             )
             model_device = gr.Dropdown(
                 label="Model Device",
                 choices=device_choices,
-                value=default_model_device,
+                value=saved_model_device,
                 scale=1,
             )
             model_precision = gr.Dropdown(
                 label="Model Precision",
                 choices=model_precision_choices,
-                value=model_precision_choices[0],
+                value=last_settings.get("model_precision", model_precision_choices[0]),
                 scale=1,
             )
             codec_device = gr.Dropdown(
                 label="Codec Device",
                 choices=device_choices,
-                value=default_codec_device,
+                value=saved_codec_device,
                 scale=1,
             )
             codec_precision = gr.Dropdown(
                 label="Codec Precision",
                 choices=codec_precision_choices,
-                value=codec_precision_choices[0],
+                value=last_settings.get("codec_precision", codec_precision_choices[0]),
                 scale=1,
             )
             # ウォーターマークは常にOFF（gr.State で非表示管理）
@@ -597,10 +663,11 @@ def build_ui() -> gr.Blocks:
             clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
 
         # --- テキスト入力 ---
-        text = gr.Textbox(label="Text", lines=4)
+        text = gr.Textbox(label="Text", lines=4, value=last_settings.get("text", ""))
         caption = gr.Textbox(
             label="Caption / Style Prompt (optional)",
             lines=4,
+            value=last_settings.get("caption", ""),
         )
 
         # --- サンプリング設定 ---
@@ -608,47 +675,47 @@ def build_ui() -> gr.Blocks:
         with gr.Accordion("Sampling", open=True):
             with gr.Row():
                 num_steps = gr.Slider(
-                    label="Num Steps", minimum=1, maximum=120, value=40, step=1
+                    label="Num Steps", minimum=1, maximum=120, value=last_settings.get("num_steps", 40), step=1
                 )
-                seed_raw = gr.Textbox(label="Seed (blank=random)", value="")
+                seed_raw = gr.Textbox(label="Seed (blank=random)", value=last_settings.get("seed_raw", ""))
 
             with gr.Row():
                 cfg_guidance_mode = gr.Dropdown(
                     label="CFG Guidance Mode",
                     choices=["independent", "joint", "alternating"],
-                    value="independent",
+                    value=last_settings.get("cfg_guidance_mode", "independent"),
                 )
                 cfg_scale_text = gr.Slider(
                     label="CFG Scale Text",
                     minimum=0.0,
                     maximum=10.0,
-                    value=2.0,
+                    value=last_settings.get("cfg_scale_text", 2.0),
                     step=0.1,
                 )
                 cfg_scale_caption = gr.Slider(
                     label="CFG Scale Caption",
                     minimum=0.0,
                     maximum=10.0,
-                    value=4.0,
+                    value=last_settings.get("cfg_scale_caption", 4.0),
                     step=0.1,
                 )
 
         # --- Advanced 設定 ---
         with gr.Accordion("Advanced (Optional)", open=False):
-            cfg_scale_raw = gr.Textbox(label="CFG Scale Override (optional)", value="")
+            cfg_scale_raw = gr.Textbox(label="CFG Scale Override (optional)", value=last_settings.get("cfg_scale_raw", ""))
             with gr.Row():
-                cfg_min_t = gr.Number(label="CFG Min t", value=0.5)
-                cfg_max_t = gr.Number(label="CFG Max t", value=1.0)
-                context_kv_cache = gr.Checkbox(label="Context KV Cache", value=True)
+                cfg_min_t = gr.Number(label="CFG Min t", value=last_settings.get("cfg_min_t", 0.5))
+                cfg_max_t = gr.Number(label="CFG Max t", value=last_settings.get("cfg_max_t", 1.0))
+                context_kv_cache = gr.Checkbox(label="Context KV Cache", value=last_settings.get("context_kv_cache", True))
             with gr.Row():
-                max_text_len_raw = gr.Textbox(label="Max Text Len (optional)", value="")
-                max_caption_len_raw = gr.Textbox(label="Max Caption Len (optional)", value="")
+                max_text_len_raw = gr.Textbox(label="Max Text Len (optional)", value=last_settings.get("max_text_len_raw", ""))
+                max_caption_len_raw = gr.Textbox(label="Max Caption Len (optional)", value=last_settings.get("max_caption_len_raw", ""))
             with gr.Row():
                 truncation_factor_raw = gr.Textbox(
-                    label="Truncation Factor (optional)", value=""
+                    label="Truncation Factor (optional)", value=last_settings.get("truncation_factor_raw", "")
                 )
-                rescale_k_raw = gr.Textbox(label="Rescale k (optional)", value="")
-                rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value="")
+                rescale_k_raw = gr.Textbox(label="Rescale k (optional)", value=last_settings.get("rescale_k_raw", ""))
+                rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value=last_settings.get("rescale_sigma_raw", ""))
 
         # --- 生成制御 ---
         # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
@@ -658,7 +725,7 @@ def build_ui() -> gr.Blocks:
             generate_btn = gr.Button("Generate", variant="primary", scale=3)
             generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
             # autoplay: 最新の1件を自動再生するかの切り替え
-            autoplay = gr.Checkbox(label="Autoplay", value=True, scale=1)
+            autoplay = gr.Checkbox(label="Autoplay", value=last_settings.get("autoplay", True), scale=1)
             cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
 
         # --- Generate Forever 稼働中のスピナー表示 ---
