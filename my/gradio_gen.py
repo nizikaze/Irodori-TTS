@@ -262,12 +262,12 @@ _QUEUE_PLAYBACK_JS = f"""
                 window._queueAudioList.forEach(function(item, index) {{
                     let li = document.createElement('li');
                     li.style.padding = '5px 8px';
-                    li.style.borderBottom = '1px solid #e5e7eb';
+                    li.style.borderBottom = '1px solid var(--border-color-primary, #e5e7eb)';
                     li.style.display = 'flex';
                     li.style.justifyContent = 'space-between';
                     li.style.alignItems = 'center';
                     li.style.transition = 'background-color 0.2s';
-                    li.onmouseover = function() {{ this.style.backgroundColor = '#f3f4f6'; }};
+                    li.onmouseover = function() {{ this.style.backgroundColor = 'var(--background-fill-secondary, #f3f4f6)'; }};
                     li.onmouseout = function() {{ this.style.backgroundColor = 'transparent'; }};
                     
                     let nameSpan = document.createElement('span');
@@ -749,8 +749,8 @@ def build_ui() -> gr.Blocks:
         # Why: 独立した再生プレイヤーでキューを管理するため、コンテナごと表示する。
         #      直近の生成結果より上に配置することで、ユーザーの目に留まりやすくする。
         gr.HTML("""
-        <div id="queue-player-container" style="display:none; padding: 10px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 15px;">
-            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: #374151;">
+        <div id="queue-player-container" style="display:none; padding: 10px; background: var(--background-fill-secondary, #f9fafb); border-radius: 8px; border: 1px solid var(--border-color-primary, #e5e7eb); margin-bottom: 15px;">
+            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: var(--body-text-color, #374151);">
                 ▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span>
             </div>
             <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;" 
@@ -758,8 +758,8 @@ def build_ui() -> gr.Blocks:
                 onplay="window._isQueuePlaying = true; window._queueForcePaused = false; if(window.updateQueueUI) window.updateQueueUI()"
                 onpause="if(!this.ended){ window._queueForcePaused = true; window._isQueuePlaying = false; if(window.updateQueueUI) window.updateQueueUI(); }"
             ></audio>
-            <div id="queue-list-container" style="display:none; max-height: 180px; overflow-y: auto; background: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);">
-                <ul id="queue-list" style="list-style: none; padding: 0; margin: 0; font-size: 13px; color: #374151;"></ul>
+            <div id="queue-list-container" style="display:none; max-height: 180px; overflow-y: auto; background: var(--background-fill-primary, #ffffff); border: 1px solid var(--border-color-primary, #d1d5db); border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);">
+                <ul id="queue-list" style="list-style: none; padding: 0; margin: 0; font-size: 13px; color: var(--body-text-color, #374151);"></ul>
             </div>
         </div>
         """)
