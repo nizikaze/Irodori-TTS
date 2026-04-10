@@ -956,6 +956,77 @@ def build_ui() -> gr.Blocks:
         )
         clear_cache_btn.click(_clear_runtime_cache, outputs=[clear_cache_msg])
 
+        def _load_settings_for_ui():
+            """
+            ページリロード時に最新の設定JSONを読み込み、各UIコンポーネントの初期値として返す。
+            Why: 別タブで変更した設定や、ブラウザのリロード時にも最新の前回設定を反映するため。
+            """
+            s = load_last_settings()
+            
+            # 必須の選択肢を検証しながら復元
+            m_device = s.get("model_device", default_model_device)
+            if m_device not in device_choices:
+                m_device = default_model_device
+
+            c_device = s.get("codec_device", default_codec_device)
+            if c_device not in device_choices:
+                c_device = default_codec_device
+
+            return [
+                s.get("checkpoint", default_checkpoint),
+                m_device,
+                s.get("model_precision", model_precision_choices[0]),
+                c_device,
+                s.get("codec_precision", codec_precision_choices[0]),
+                s.get("text", ""),
+                s.get("caption", ""),
+                s.get("num_steps", 40),
+                s.get("seed_raw", ""),
+                s.get("cfg_guidance_mode", "independent"),
+                s.get("cfg_scale_text", 2.0),
+                s.get("cfg_scale_caption", 4.0),
+                s.get("cfg_scale_raw", ""),
+                s.get("cfg_min_t", 0.5),
+                s.get("cfg_max_t", 1.0),
+                s.get("context_kv_cache", True),
+                s.get("max_text_len_raw", ""),
+                s.get("max_caption_len_raw", ""),
+                s.get("truncation_factor_raw", ""),
+                s.get("rescale_k_raw", ""),
+                s.get("rescale_sigma_raw", ""),
+                s.get("autoplay", True),
+            ]
+
+        # --- UIリロード時の最新設定の読み込み ---
+        demo.load(
+            fn=_load_settings_for_ui,
+            inputs=None,
+            outputs=[
+                checkpoint,
+                model_device,
+                model_precision,
+                codec_device,
+                codec_precision,
+                text,
+                caption,
+                num_steps,
+                seed_raw,
+                cfg_guidance_mode,
+                cfg_scale_text,
+                cfg_scale_caption,
+                cfg_scale_raw,
+                cfg_min_t,
+                cfg_max_t,
+                context_kv_cache,
+                max_text_len_raw,
+                max_caption_len_raw,
+                truncation_factor_raw,
+                rescale_k_raw,
+                rescale_sigma_raw,
+                autoplay,
+            ]
+        )
+
     return demo
 
 
