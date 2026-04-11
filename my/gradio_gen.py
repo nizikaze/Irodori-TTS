@@ -245,6 +245,24 @@ _QUEUE_PLAYBACK_JS = f"""
     }};
 
     /**
+     * キューをすべてクリアする
+     */
+    window.clearQueue = function() {
+        window._queueAudioList = [];
+        window._isQueuePlaying = false;
+        window._currentPlayingItem = null;
+        
+        const audioEl = document.getElementById('queue-audio');
+        if (audioEl) {
+            audioEl.pause();
+            audioEl.removeAttribute('src'); // src=" " だとリロードが走るブラウザがあるため
+        }
+        
+        console.log('[queue-playback] queue cleared');
+        window.updateQueueUI();
+    };
+
+    /**
      * キューのUI状態を更新する。
      */
     window.updateQueueUI = function() {{
@@ -770,8 +788,9 @@ def build_ui() -> gr.Blocks:
         #      直近の生成結果より上に配置することで、ユーザーの目に留まりやすくする。
         gr.HTML("""
         <div id="queue-player-container" style="display:none; padding: 10px; background: var(--background-fill-secondary, #f9fafb); border-radius: 8px; border: 1px solid var(--border-color-primary, #e5e7eb); margin-bottom: 15px;">
-            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: var(--body-text-color, #374151);">
-                ▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span>
+            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: var(--body-text-color, #374151); display: flex; justify-content: space-between; align-items: center;">
+                <div>▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span></div>
+                <button onclick="if(window.clearQueue) window.clearQueue()" style="font-size:12px; padding: 4px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">全削除</button>
             </div>
             <div id="current-playing-info" style="font-size:13px; margin-bottom:8px; display:none; padding: 6px; background-color: var(--background-fill-primary, #ffffff); border-radius: 4px; border-left: 4px solid #7c3aed;">
                 <span style="color: var(--body-text-color-sub, #6b7280);">現在再生中:</span> 
