@@ -188,7 +188,7 @@ def select_generations(
     limit: int | None = None,
     offset: int = 0,
     db_path: Path | str | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
     """
     生成履歴を検索・取得する。
 
@@ -209,7 +209,7 @@ def select_generations(
         db_path:       DBファイルのパス。None の場合はデフォルト。
 
     Returns:
-        list[dict]: 各行を辞書化したリスト。キーはカラム名に対応。
+        tuple[list[dict], int]: (各行を辞書化したリスト, フィルター適用後の総件数)
     """
     # ソート順のマッピング（SQLインジェクション防止のためホワイトリスト方式）
     _ORDER_MAP: dict[str, str] = {
@@ -254,22 +254,27 @@ def select_generations(
             f"CASE WHEN {col} IS NULL THEN 1 ELSE 0 END, {col} {direction}"
         )
 
-    query = f"SELECT * FROM generations {where_sql} ORDER BY {order_clause}"
-
-    if limit is not None:
-        query += " LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-    elif offset > 0:
-        # limitなしでもoffsetを使いたい場合は大きなlimitを指定
-        query += " LIMIT -1 OFFSET ?"
-        params.append(offset)
-
     conn = _get_connection(db_path)
     try:
+        # 総件数を取得（フィルター適用後、limit/offset適用前）
+        count_query = f"SELECT COUNT(*) FROM generations {where_sql}"
+        total_count = conn.execute(count_query, params[:len(params)]).fetchone()[0]
+
+        # データを取得（limit/offset適用）
+        query = f"SELECT * FROM generations {where_sql} ORDER BY {order_clause}"
+
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        elif offset > 0:
+            # limitなしでもoffsetを使いたい場合は大きなlimitを指定
+            query += " LIMIT -1 OFFSET ?"
+            params.append(offset)
+
         rows = conn.execute(query, params).fetchall()
         # sqlite3.Row を普通のdictに変換して返す
         # （sqlite3.Row はJSON化やDataFrame化で扱いにくいため）
-        return [dict(row) for row in rows]
+        return [dict(row) for row in rows], total_count
     finally:
         conn.close()
 
@@ -377,13 +382,13 @@ if __name__ == "__main__":
     print(f"INSERT成功: id={test_id}")
 
     # 全件取得テスト
-    all_rows = select_generations()
-    print(f"全件取得: {len(all_rows)} 件")
+    all_rows, total_count = select_generations()
+    print(f"全件取得: {len(all_rows)} 件 (総件数: {total_count})")
     for row in all_rows:
         print(f"  id={row['id']}, text={row['text']!r}, seed={row['seed']}")
 
     # キーワード検索テスト
-    keyword_rows = select_generations(keyword="テスト")
-    print(f"キーワード検索 'テスト': {len(keyword_rows)} 件")
+    keyword_rows, keyword_count = select_generations(keyword="テスト")
+    print(f"キーワード検索 'テスト': {len(keyword_rows)} 件 (総件数: {keyword_count})")
 
     print("全テスト完了")

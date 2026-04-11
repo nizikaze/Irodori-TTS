@@ -33,11 +33,10 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+import streamlit as st  # noqa: E402
+from streamlit_autorefresh import st_autorefresh  # noqa: E402
 
-from my.db import init_db, select_generations, update_generation
-
+from my.db import init_db, select_generations, update_generation  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #  Streamlit バージョン互換ヘルパー
@@ -247,7 +246,7 @@ if "display_limit" not in st.session_state:
 
 current_limit = st.session_state["display_limit"]
 
-rows = select_generations(
+rows, total_count = select_generations(
     keyword=keyword if keyword else None,
     favorite_only=favorite_only,
     order_by=sort_key,
@@ -260,7 +259,7 @@ rows = select_generations(
 # --------------------------------------------------------------------------- #
 
 st.title("🎵 TTS生成履歴")
-st.caption(f"全 {len(rows)} 件")
+st.caption(f"全 {total_count} 件")
 
 if not rows:
     st.info("条件に一致するデータがありません。")
