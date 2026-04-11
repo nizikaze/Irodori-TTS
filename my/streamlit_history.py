@@ -34,6 +34,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from my.db import init_db, select_generations, update_generation
 
@@ -210,6 +211,26 @@ sort_key = _SORT_OPTIONS[sort_label]
 # フィルターが適用されたら、表示件数を初期値に戻す
 if submitted:
     st.session_state["display_limit"] = 50
+
+st.sidebar.markdown("---")
+st.sidebar.caption("🔧 更新設定")
+
+# 専用の更新ボタン
+if st.sidebar.button("🔄 今すぐ最新化", use_container_width=True):
+    _safe_rerun()
+
+# 自動更新の間隔（0でオフ）
+refresh_interval = st.sidebar.number_input(
+    "自動更新間隔 (秒)",
+    min_value=0,
+    max_value=3600,
+    value=0,
+    step=5,
+    help="指定した秒数ごとに自動で履歴を再取得します。0を設定するとオフになります。",
+)
+
+if refresh_interval > 0:
+    st_autorefresh(interval=refresh_interval * 1000, limit=None, key="history_auto_refresh")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("TTS生成履歴ブラウザ v1.0")
