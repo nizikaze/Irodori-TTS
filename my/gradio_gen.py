@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
-from typing import Generator
 
 import gradio as gr
 
@@ -45,7 +45,6 @@ from gradio_app_voicedesign import (
     _parse_optional_float,
     _parse_optional_int,
     _precision_choices_for_device,
-    _resolve_checkpoint_path,
 )
 from irodori_tts.inference_runtime import (
     SamplingRequest,
@@ -91,7 +90,7 @@ _SETTINGS_PATH = Path(__file__).resolve().parent / "data" / "last_settings.json"
 def load_last_settings() -> dict:
     if _SETTINGS_PATH.exists():
         try:
-            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            with open(_SETTINGS_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             print(f"[my-gen] Failed to load settings: {e}")
@@ -162,7 +161,7 @@ _QUEUE_PLAYBACK_JS = f"""
      */
     window.enqueueAudio = function(url) {{
         if (!url) return;
-        
+
         let name = "Audio";
         try {{
             // URLデコードし、スラッシュ(/)とバックスラッシュ(\\)の両方で分割して最後の部分を取得する
@@ -177,7 +176,7 @@ _QUEUE_PLAYBACK_JS = f"""
         window._queueAudioList.unshift({{ url: url, name: name }});
         console.log('[queue-playback] queued:', name, 'size:', window._queueAudioList.length);
         window.updateQueueUI();
-        
+
         // If not currently playing and not forcibly paused by user, start now
         if (!window._isQueuePlaying && !window._queueForcePaused) {{
             window.playNextInQueue();
@@ -190,10 +189,10 @@ _QUEUE_PLAYBACK_JS = f"""
     window.playSpecificQueueItem = function(index) {{
         const audioEl = document.getElementById('queue-audio');
         if (!audioEl) return;
-        
+
         if (index >= 0 && index < window._queueAudioList.length) {{
             let item = window._queueAudioList.splice(index, 1)[0];
-            
+
             window._isQueuePlaying = true;
             window._queueForcePaused = false;
             window._currentPlayingItem = item; // 現在の再生アイテムに設定
@@ -215,11 +214,11 @@ _QUEUE_PLAYBACK_JS = f"""
     window.playNextInQueue = function() {{
         const audioEl = document.getElementById('queue-audio');
         if (!audioEl) return;
-        
+
         if (window._queueAudioList.length > 0) {{
             // unshift で先頭に追加しているため、一番古いものは末尾(pop)
             let item = window._queueAudioList.pop();
-            
+
             // max queue size limit
             while (window._queueAudioList.length > MAX_QUEUE_SIZE) {{
                 window._queueAudioList.pop(); // 古いものから捨てる
@@ -247,20 +246,21 @@ _QUEUE_PLAYBACK_JS = f"""
     /**
      * キューをすべてクリアする
      */
-    window.clearQueue = function() {
+    window.clearQueue = function() {{
         window._queueAudioList = [];
         window._isQueuePlaying = false;
         window._currentPlayingItem = null;
-        
+        window._queueForcePaused = false;
+
         const audioEl = document.getElementById('queue-audio');
-        if (audioEl) {
+        if (audioEl) {{
             audioEl.pause();
             audioEl.removeAttribute('src'); // src=" " だとリロードが走るブラウザがあるため
-        }
-        
+        }}
+
         console.log('[queue-playback] queue cleared');
         window.updateQueueUI();
-    };
+    }};
 
     /**
      * キューのUI状態を更新する。
@@ -272,15 +272,15 @@ _QUEUE_PLAYBACK_JS = f"""
         const queueUl = document.getElementById('queue-list');
         const currentPlayingInfo = document.getElementById('current-playing-info');
         const currentPlayingName = document.getElementById('current-playing-name');
-        
+
         if (!container || !badge) return;
-        
+
         if (window._isQueuePlaying || window._queueForcePaused || window._queueAudioList.length > 0 || window._currentPlayingItem) {{
             container.style.display = 'block';
         }} else {{
             container.style.display = 'none';
         }}
-        
+
         // 再生中のファイル名表示を更新
         if (window._currentPlayingItem && currentPlayingInfo && currentPlayingName) {{
             currentPlayingInfo.style.display = 'block';
@@ -288,15 +288,15 @@ _QUEUE_PLAYBACK_JS = f"""
         }} else if (currentPlayingInfo) {{
             currentPlayingInfo.style.display = 'none';
         }}
-        
+
         if (window._queueAudioList.length > 0) {{
             badge.style.display = 'inline-block';
             badge.innerText = window._queueAudioList.length;
-            
+
             if (queueListContainer && queueUl) {{
                 queueListContainer.style.display = 'block';
                 queueUl.innerHTML = '';
-                
+
                 window._queueAudioList.forEach(function(item, index) {{
                     let li = document.createElement('li');
                     li.style.padding = '5px 8px';
@@ -307,12 +307,12 @@ _QUEUE_PLAYBACK_JS = f"""
                     li.style.transition = 'background-color 0.2s';
                     li.onmouseover = function() {{ this.style.backgroundColor = 'var(--background-fill-secondary, #f3f4f6)'; }};
                     li.onmouseout = function() {{ this.style.backgroundColor = 'transparent'; }};
-                    
+
                     let nameSpan = document.createElement('span');
                     nameSpan.innerText = item.name;
                     nameSpan.style.wordBreak = 'break-all';
                     nameSpan.style.marginRight = '10px';
-                    
+
                     let playBtn = document.createElement('button');
                     playBtn.innerText = '再生';
                     playBtn.style.padding = '4px 12px';
@@ -327,7 +327,7 @@ _QUEUE_PLAYBACK_JS = f"""
                     playBtn.onclick = function() {{
                         window.playSpecificQueueItem(index);
                     }};
-                    
+
                     li.appendChild(nameSpan);
                     li.appendChild(playBtn);
                     queueUl.appendChild(li);
@@ -793,10 +793,10 @@ def build_ui() -> gr.Blocks:
                 <button onclick="if(window.clearQueue) window.clearQueue()" style="font-size:12px; padding: 4px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">全削除</button>
             </div>
             <div id="current-playing-info" style="font-size:13px; margin-bottom:8px; display:none; padding: 6px; background-color: var(--background-fill-primary, #ffffff); border-radius: 4px; border-left: 4px solid #7c3aed;">
-                <span style="color: var(--body-text-color-sub, #6b7280);">現在再生中:</span> 
+                <span style="color: var(--body-text-color-sub, #6b7280);">現在再生中:</span>
                 <span id="current-playing-name" style="font-weight:bold; color: var(--body-text-color, #374151); word-break: break-all; margin-left: 4px;"></span>
             </div>
-            <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;" 
+            <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;"
                 onended="if(window.playNextInQueue) window.playNextInQueue()"
                 onplay="window._isQueuePlaying = true; window._queueForcePaused = false; if(window.updateQueueUI) window.updateQueueUI()"
                 onpause="if(!this.ended){ window._queueForcePaused = true; window._isQueuePlaying = false; if(window.updateQueueUI) window.updateQueueUI(); }"
@@ -806,7 +806,7 @@ def build_ui() -> gr.Blocks:
             </div>
         </div>
         """)
-        
+
         # --- キュー処理用隠し File ---
         # 生成完了のたびにこのコンポーネントに音声パスが渡され、JS(enqueueAudio)にURL(Token付)が発火する
         queue_new_item = gr.File(visible=False, elem_id="queue-new-item")
@@ -981,7 +981,7 @@ def build_ui() -> gr.Blocks:
             Why: 別タブで変更した設定や、ブラウザのリロード時にも最新の前回設定を反映するため。
             """
             s = load_last_settings()
-            
+
             # 必須の選択肢を検証しながら復元
             m_device = s.get("model_device", default_model_device)
             if m_device not in device_choices:
