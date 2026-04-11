@@ -177,29 +177,39 @@ init_db()
 
 st.sidebar.title("🔍 フィルター")
 
-# キーワード検索
-# text / caption のどちらかに部分一致すれば表示する
-keyword = st.sidebar.text_input(
-    "キーワード検索",
-    value="",
-    placeholder="text / caption で検索...",
-    help="生成テキストまたはキャプション（スタイルプロンプト）を部分一致で検索します。",
-)
+# UI操作のたびにDBアクセス・再描画が走るのを防ぐため、フォーム化する
+with st.sidebar.form("filter_form"):
+    # キーワード検索
+    # text / caption のどちらかに部分一致すれば表示する
+    keyword = st.text_input(
+        "キーワード検索",
+        value="",
+        placeholder="text / caption で検索...",
+        help="生成テキストまたはキャプション（スタイルプロンプト）を部分一致で検索します。",
+    )
 
-# お気に入りのみ表示
-favorite_only = st.sidebar.checkbox(
-    "⭐ お気に入りのみ表示",
-    value=False,
-)
+    # お気に入りのみ表示
+    favorite_only = st.checkbox(
+        "⭐ お気に入りのみ表示",
+        value=False,
+    )
 
-# ソート順
-sort_label = st.sidebar.selectbox(
-    "📊 ソート順",
-    options=list(_SORT_OPTIONS.keys()),
-    index=0,  # デフォルト: 新しい順
-)
+    # ソート順
+    sort_label = st.selectbox(
+        "📊 ソート順",
+        options=list(_SORT_OPTIONS.keys()),
+        index=0,  # デフォルト: 新しい順
+    )
+
+    # 適用ボタン
+    submitted = st.form_submit_button("適用する")
+
 # 表示ラベルからDB側のキーに変換
 sort_key = _SORT_OPTIONS[sort_label]
+
+# フィルターが適用されたら、表示件数を初期値に戻す
+if submitted:
+    st.session_state["display_limit"] = 50
 
 st.sidebar.markdown("---")
 st.sidebar.caption("TTS生成履歴ブラウザ v1.0")
@@ -210,10 +220,17 @@ st.sidebar.caption("TTS生成履歴ブラウザ v1.0")
 #  - select_generations() でDB検索し結果をリストで取得
 # --------------------------------------------------------------------------- #
 
+# セッションステートに表示上限がなければ初期化
+if "display_limit" not in st.session_state:
+    st.session_state["display_limit"] = 50
+
+current_limit = st.session_state["display_limit"]
+
 rows = select_generations(
     keyword=keyword if keyword else None,
     favorite_only=favorite_only,
     order_by=sort_key,
+    limit=current_limit,
 )
 
 
@@ -451,3 +468,15 @@ for row in rows:
 
         # カード終了タグ
         st.markdown("</div>", unsafe_allow_html=True)
+
+# --------------------------------------------------------------------------- #
+#  フッター: もっと見るボタン
+# --------------------------------------------------------------------------- #
+
+# 表示件数分取得できていれば、さらに続きがある可能性があるためボタンを表示
+if len(rows) >= current_limit:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔽 さらに読み込む", use_container_width=True):
+            st.session_state["display_limit"] += 50
+            _safe_rerun()
