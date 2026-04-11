@@ -250,15 +250,13 @@ def select_generations(
         #   → "CASE WHEN rating IS NULL THEN 1 ELSE 0 END, rating DESC"
         col = order_clause.split()[0]  # "rating"
         direction = order_clause.split()[1]  # "DESC"
-        order_clause = (
-            f"CASE WHEN {col} IS NULL THEN 1 ELSE 0 END, {col} {direction}"
-        )
+        order_clause = f"CASE WHEN {col} IS NULL THEN 1 ELSE 0 END, {col} {direction}"
 
     conn = _get_connection(db_path)
     try:
         # 総件数を取得（フィルター適用後、limit/offset適用前）
         count_query = f"SELECT COUNT(*) FROM generations {where_sql}"
-        total_count = conn.execute(count_query, params[:len(params)]).fetchone()[0]
+        total_count = conn.execute(count_query, params[: len(params)]).fetchone()[0]
 
         # データを取得（limit/offset適用）
         query = f"SELECT * FROM generations {where_sql} ORDER BY {order_clause}"

@@ -87,6 +87,7 @@ _OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "outputs"
 # --------------------------------------------------------------------------- #
 _SETTINGS_PATH = Path(__file__).resolve().parent / "data" / "last_settings.json"
 
+
 def load_last_settings() -> dict:
     if _SETTINGS_PATH.exists():
         try:
@@ -95,6 +96,7 @@ def load_last_settings() -> dict:
         except Exception as e:
             print(f"[my-gen] Failed to load settings: {e}")
     return {}
+
 
 def save_last_settings(settings: dict) -> None:
     _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -343,6 +345,7 @@ _QUEUE_PLAYBACK_JS = f"""
 </script>
 """
 
+
 def _run_generation(
     checkpoint: str,
     model_device: str,
@@ -483,7 +486,9 @@ def _run_generation(
                 "gradio_app.py を使用してください。"
             )
 
-        stdout_log(f"[my-gen] runtime: {'reloaded' if reloaded else 'reused'} (iteration {iteration})")
+        stdout_log(
+            f"[my-gen] runtime: {'reloaded' if reloaded else 'reused'} (iteration {iteration})"
+        )
 
         result = runtime.synthesize(
             SamplingRequest(
@@ -593,7 +598,14 @@ def _run_generation(
         # スピナーの表示状態を決定
         spinner_visible = forever
 
-        yield (*audio_updates, detail_text, timing_text, history_paths, gr.update(visible=spinner_visible), new_queue_path)
+        yield (
+            *audio_updates,
+            detail_text,
+            timing_text,
+            history_paths,
+            gr.update(visible=spinner_visible),
+            new_queue_path,
+        )
 
         # forever=False なら1回で終了
         if not forever:
@@ -617,7 +629,14 @@ def _run_generation(
         # 最後に Audio は変更せず、スピナーだけ非表示にする更新を yield
         # 各 Audio は現在の状態を維持（gr.update() で何も変えない）
         no_change_audios = [gr.update() for _ in range(_MAX_HISTORY)]
-        yield (*no_change_audios, "Generate Forever が終了しました。", gr.update(), history_paths, gr.update(visible=False), None)
+        yield (
+            *no_change_audios,
+            "Generate Forever が終了しました。",
+            gr.update(),
+            history_paths,
+            gr.update(visible=False),
+            None,
+        )
 
 
 def build_ui() -> gr.Blocks:
@@ -713,9 +732,15 @@ def build_ui() -> gr.Blocks:
         with gr.Accordion("Sampling", open=True):
             with gr.Row():
                 num_steps = gr.Slider(
-                    label="Num Steps", minimum=1, maximum=120, value=last_settings.get("num_steps", 40), step=1
+                    label="Num Steps",
+                    minimum=1,
+                    maximum=120,
+                    value=last_settings.get("num_steps", 40),
+                    step=1,
                 )
-                seed_raw = gr.Textbox(label="Seed (blank=random)", value=last_settings.get("seed_raw", ""))
+                seed_raw = gr.Textbox(
+                    label="Seed (blank=random)", value=last_settings.get("seed_raw", "")
+                )
 
             with gr.Row():
                 cfg_guidance_mode = gr.Dropdown(
@@ -740,20 +765,35 @@ def build_ui() -> gr.Blocks:
 
         # --- Advanced 設定 ---
         with gr.Accordion("Advanced (Optional)", open=False):
-            cfg_scale_raw = gr.Textbox(label="CFG Scale Override (optional)", value=last_settings.get("cfg_scale_raw", ""))
+            cfg_scale_raw = gr.Textbox(
+                label="CFG Scale Override (optional)", value=last_settings.get("cfg_scale_raw", "")
+            )
             with gr.Row():
                 cfg_min_t = gr.Number(label="CFG Min t", value=last_settings.get("cfg_min_t", 0.5))
                 cfg_max_t = gr.Number(label="CFG Max t", value=last_settings.get("cfg_max_t", 1.0))
-                context_kv_cache = gr.Checkbox(label="Context KV Cache", value=last_settings.get("context_kv_cache", True))
+                context_kv_cache = gr.Checkbox(
+                    label="Context KV Cache", value=last_settings.get("context_kv_cache", True)
+                )
             with gr.Row():
-                max_text_len_raw = gr.Textbox(label="Max Text Len (optional)", value=last_settings.get("max_text_len_raw", ""))
-                max_caption_len_raw = gr.Textbox(label="Max Caption Len (optional)", value=last_settings.get("max_caption_len_raw", ""))
+                max_text_len_raw = gr.Textbox(
+                    label="Max Text Len (optional)", value=last_settings.get("max_text_len_raw", "")
+                )
+                max_caption_len_raw = gr.Textbox(
+                    label="Max Caption Len (optional)",
+                    value=last_settings.get("max_caption_len_raw", ""),
+                )
             with gr.Row():
                 truncation_factor_raw = gr.Textbox(
-                    label="Truncation Factor (optional)", value=last_settings.get("truncation_factor_raw", "")
+                    label="Truncation Factor (optional)",
+                    value=last_settings.get("truncation_factor_raw", ""),
                 )
-                rescale_k_raw = gr.Textbox(label="Rescale k (optional)", value=last_settings.get("rescale_k_raw", ""))
-                rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value=last_settings.get("rescale_sigma_raw", ""))
+                rescale_k_raw = gr.Textbox(
+                    label="Rescale k (optional)", value=last_settings.get("rescale_k_raw", "")
+                )
+                rescale_sigma_raw = gr.Textbox(
+                    label="Rescale sigma (optional)",
+                    value=last_settings.get("rescale_sigma_raw", ""),
+                )
 
         # --- 生成制御 ---
         # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
@@ -763,7 +803,9 @@ def build_ui() -> gr.Blocks:
             generate_btn = gr.Button("Generate", variant="primary", scale=3)
             generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
             # autoplay: 最新の1件を自動再生するかの切り替え
-            autoplay = gr.Checkbox(label="Autoplay", value=last_settings.get("autoplay", True), scale=1)
+            autoplay = gr.Checkbox(
+                label="Autoplay", value=last_settings.get("autoplay", True), scale=1
+            )
             cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
 
         # --- Generate Forever 稼働中のスピナー表示 ---
@@ -819,7 +861,7 @@ def build_ui() -> gr.Blocks:
                     window.enqueueAudio(fileObj.url);
                 }
             }
-            """
+            """,
         )
 
         # --- 直近5件の履歴表示 ---
@@ -892,7 +934,14 @@ def build_ui() -> gr.Blocks:
             ]
 
         # 出力リスト（Audio×5 + ログ + タイミング + 履歴State + スピナー + 新規キューパス）
-        gen_outputs = [*out_audios, out_log, out_timing, history_state, forever_spinner, queue_new_item]
+        gen_outputs = [
+            *out_audios,
+            out_log,
+            out_timing,
+            history_state,
+            forever_spinner,
+            queue_new_item,
+        ]
 
         # --- イベントバインド ---
 
@@ -1043,7 +1092,7 @@ def build_ui() -> gr.Blocks:
                 rescale_k_raw,
                 rescale_sigma_raw,
                 autoplay,
-            ]
+            ],
         )
 
     return demo

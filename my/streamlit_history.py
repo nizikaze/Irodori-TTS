@@ -59,6 +59,7 @@ def _safe_rerun() -> None:
         # Streamlit < 1.27.0 用のフォールバック
         st.experimental_rerun()  # type: ignore[attr-defined]
 
+
 # --------------------------------------------------------------------------- #
 #  定数
 # --------------------------------------------------------------------------- #
@@ -343,11 +344,7 @@ for row in rows:
         st.markdown('<div class="gen-card">', unsafe_allow_html=True)
 
         # --- 上段: テキスト + お気に入りバッジ ---
-        fav_badge = (
-            '<span class="fav-badge">⭐ お気に入り</span>'
-            if row["favorite"]
-            else ""
-        )
+        fav_badge = '<span class="fav-badge">⭐ お気に入り</span>' if row["favorite"] else ""
         st.markdown(
             f'<div class="gen-text">{row["text"]}{fav_badge}</div>',
             unsafe_allow_html=True,
@@ -493,8 +490,8 @@ for row in rows:
 #  フッター: もっと見るボタン
 # --------------------------------------------------------------------------- #
 
-# 表示件数分取得できていれば、さらに続きがある可能性があるためボタンを表示
-if len(rows) >= current_limit:
+# 表示されていないアイテムがあれば、ボタンを表示
+if total_count > len(rows):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🔽 さらに読み込む", use_container_width=True):
