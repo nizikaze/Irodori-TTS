@@ -33,10 +33,10 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import streamlit as st
+import streamlit as st  # noqa: E402
+from streamlit_autorefresh import st_autorefresh  # noqa: E402
 
-from my.db import init_db, select_generations, update_generation
-
+from my.db import init_db, select_generations, update_generation  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #  Streamlit バージョン互換ヘルパー
@@ -58,6 +58,7 @@ def _safe_rerun() -> None:
     else:
         # Streamlit < 1.27.0 用のフォールバック
         st.experimental_rerun()  # type: ignore[attr-defined]
+
 
 # --------------------------------------------------------------------------- #
 #  定数
@@ -177,29 +178,59 @@ init_db()
 
 st.sidebar.title("🔍 フィルター")
 
-# キーワード検索
-# text / caption のどちらかに部分一致すれば表示する
-keyword = st.sidebar.text_input(
-    "キーワード検索",
-    value="",
-    placeholder="text / caption で検索...",
-    help="生成テキストまたはキャプション（スタイルプロンプト）を部分一致で検索します。",
-)
+# UI操作のたびにDBアクセス・再描画が走るのを防ぐため、フォーム化する
+with st.sidebar.form("filter_form"):
+    # キーワード検索
+    # text / caption のどちらかに部分一致すれば表示する
+    keyword = st.text_input(
+        "キーワード検索",
+        value="",
+        placeholder="text / caption で検索...",
+        help="生成テキストまたはキャプション(スタイルプロンプト)を部分一致で検索します。",
+    )
 
-# お気に入りのみ表示
-favorite_only = st.sidebar.checkbox(
-    "⭐ お気に入りのみ表示",
-    value=False,
-)
+    # お気に入りのみ表示
+    favorite_only = st.checkbox(
+        "⭐ お気に入りのみ表示",
+        value=False,
+    )
 
-# ソート順
-sort_label = st.sidebar.selectbox(
-    "📊 ソート順",
-    options=list(_SORT_OPTIONS.keys()),
-    index=0,  # デフォルト: 新しい順
-)
+    # ソート順
+    sort_label = st.selectbox(
+        "📊 ソート順",
+        options=list(_SORT_OPTIONS.keys()),
+        index=0,  # デフォルト: 新しい順
+    )
+
+    # 適用ボタン
+    submitted = st.form_submit_button("適用する")
+
 # 表示ラベルからDB側のキーに変換
 sort_key = _SORT_OPTIONS[sort_label]
+
+# フィルターが適用されたら、表示件数を初期値に戻す
+if submitted:
+    st.session_state["display_limit"] = 50
+
+st.sidebar.markdown("---")
+st.sidebar.caption("🔧 更新設定")
+
+# 専用の更新ボタン
+if st.sidebar.button("🔄 今すぐ最新化", use_container_width=True):
+    _safe_rerun()
+
+# 自動更新の間隔（0でオフ）
+refresh_interval = st.sidebar.number_input(
+    "自動更新間隔 (秒)",
+    min_value=0,
+    max_value=3600,
+    value=0,
+    step=5,
+    help="指定した秒数ごとに自動で履歴を再取得します。0を設定するとオフになります。",
+)
+
+if refresh_interval > 0:
+    st_autorefresh(interval=refresh_interval * 1000, limit=None, key="history_auto_refresh")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("TTS生成履歴ブラウザ v1.0")
@@ -210,10 +241,17 @@ st.sidebar.caption("TTS生成履歴ブラウザ v1.0")
 #  - select_generations() でDB検索し結果をリストで取得
 # --------------------------------------------------------------------------- #
 
-rows = select_generations(
+# セッションステートに表示上限がなければ初期化
+if "display_limit" not in st.session_state:
+    st.session_state["display_limit"] = 50
+
+current_limit = st.session_state["display_limit"]
+
+rows, total_count = select_generations(
     keyword=keyword if keyword else None,
     favorite_only=favorite_only,
     order_by=sort_key,
+    limit=current_limit,
 )
 
 
@@ -222,7 +260,7 @@ rows = select_generations(
 # --------------------------------------------------------------------------- #
 
 st.title("🎵 TTS生成履歴")
-st.caption(f"全 {len(rows)} 件")
+st.caption(f"全 {total_count} 件")
 
 if not rows:
     st.info("条件に一致するデータがありません。")
@@ -306,11 +344,7 @@ for row in rows:
         st.markdown('<div class="gen-card">', unsafe_allow_html=True)
 
         # --- 上段: テキスト + お気に入りバッジ ---
-        fav_badge = (
-            '<span class="fav-badge">⭐ お気に入り</span>'
-            if row["favorite"]
-            else ""
-        )
+        fav_badge = '<span class="fav-badge">⭐ お気に入り</span>' if row["favorite"] else ""
         st.markdown(
             f'<div class="gen-text">{row["text"]}{fav_badge}</div>',
             unsafe_allow_html=True,
@@ -451,3 +485,15 @@ for row in rows:
 
         # カード終了タグ
         st.markdown("</div>", unsafe_allow_html=True)
+
+# --------------------------------------------------------------------------- #
+#  フッター: もっと見るボタン
+# --------------------------------------------------------------------------- #
+
+# 表示されていないアイテムがあれば、ボタンを表示
+if total_count > len(rows):
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔽 さらに読み込む", use_container_width=True):
+            st.session_state["display_limit"] += 50
+            _safe_rerun()
