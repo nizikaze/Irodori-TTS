@@ -6,11 +6,15 @@
 #   このスクリプトは他のデバイスから本PCにアクセスする用途を想定しています。
 #   ローカル環境内での使用を推奨します。
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || { echo "Error: Failed to change directory" >&2; exit 1; }
 
 # MacのIPアドレスを取得（en0: Wi-Fi, en1: Ethernet）
 if command -v ipconfig >/dev/null 2>&1; then
     LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
+    # ipconfigが存在してもgetifaddrが空の場合のフォールバック
+    if [ -z "$LOCAL_IP" ]; then
+        LOCAL_IP=$(hostname -I | awk '{print $1}')
+    fi
 else
     LOCAL_IP=$(hostname -I | awk '{print $1}')
 fi
