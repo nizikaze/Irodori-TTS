@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# 独自生成UI（Gradio）ネットワーク公開用起動スクリプト
+# 同一ネットワーク内の別PCからもアクセス可能にするための設定
+#
+# 注意:
+#   このスクリプトは他のデバイスから本PCにアクセスする用途を想定しています。
+#   ローカル環境内での使用を推奨します。
+
+cd "$(dirname "$0")/.." || { echo "Error: Failed to change directory" >&2; exit 1; }
+
+# MacのIPアドレスを取得（en0: Wi-Fi, en1: Ethernet）
+if command -v ipconfig >/dev/null 2>&1; then
+    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
+    # ipconfigが存在してもgetifaddrが空の場合のフォールバック
+    if [ -z "$LOCAL_IP" ]; then
+        LOCAL_IP=$(ifconfig | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
+    fi
+else
+    LOCAL_IP=$(ifconfig | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
+fi
+
+echo "======================================"
+echo "🌐 ネットワーク公開モードでGradioを起動します"
+if [ -n "$LOCAL_IP" ]; then
+    echo "▶ 他のPCからのアクセス用URL: http://${LOCAL_IP}:7862"
+else
+    echo "▶ 他のPCからは、このPCのIPアドレスにポート7862でアクセスしてください"
+fi
+echo "======================================"
+
+# 外部からのアクセスを許可するため --server-name 0.0.0.0 を指定
+uv run python -m my.gradio_gen --server-name 0.0.0.0 --server-port 7862
