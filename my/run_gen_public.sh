@@ -13,10 +13,10 @@ if command -v ipconfig >/dev/null 2>&1; then
     LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
     # ipconfigが存在してもgetifaddrが空の場合のフォールバック
     if [ -z "$LOCAL_IP" ]; then
-        LOCAL_IP=$(hostname -I | awk '{print $1}')
+        LOCAL_IP=$(ifconfig | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
     fi
 else
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    LOCAL_IP=$(ifconfig | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
 fi
 
 echo "======================================"
