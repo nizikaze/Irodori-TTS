@@ -104,6 +104,9 @@ The hosted VoiceDesign demo is available at [Aratako/Irodori-TTS-500M-v2-VoiceDe
 
 `gradio_app.py` is for `Aratako/Irodori-TTS-500M-v2`. `gradio_app_voicedesign.py` is for `Aratako/Irodori-TTS-500M-v2-VoiceDesign`.
 
+### Network Access / IP Sharing
+If you want to access the Web UI from another device on the same local network or remotely without static IPs, please refer to the [Network Access Guide](docs/network_access_guide.md).
+
 ## Inference
 
 ### CLI
