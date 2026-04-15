@@ -229,3 +229,6 @@ my/data/last_settings.json
 my/data/*.db
 my/data/*.db-wal
 my/data/*.db-shm
+
+# 環境固有ファイル
+.DS_Store
