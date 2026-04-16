@@ -561,11 +561,14 @@ def _run_generation(
         stdout_log(f"[my-ref] saved: {out_path_str}")
 
         # --- DB に書き込み ---
-        # Why: 参照音声版では caption がないため、cfg_scale_caption は None で記録する。
-        #      DB スキーマは gradio_gen.py と共通のため、caption カラムは NULL になる。
+        # Why: 参照音声版では caption（スタイルプロンプト）を使わないが、
+        #      caption カラムに参照音声のファイル名を記録しておくことで、
+        #      DB 上でどの参照音声を使って生成したかを追跡できるようにする。
+        #      参照音声がない場合は "none" を記録する。
+        ref_caption = Path(ref_wav).name if ref_wav else "none"
         insert_generation(
             text=text_value,
-            caption=None,  # 参照音声版では caption なし
+            caption=ref_caption,  # 参照音声のファイル名、なければ "none"
             seed=used_seed,
             num_steps=int(num_steps),
             cfg_scale_text=float(cfg_scale_text),
