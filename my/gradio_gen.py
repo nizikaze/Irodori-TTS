@@ -76,6 +76,19 @@ _session_stop_flags: dict[str, bool] = {}
 # --------------------------------------------------------------------------- #
 _session_autoplay_flags: dict[str, bool] = {}
 
+# --------------------------------------------------------------------------- #
+#  セッションごとの Live Update（プロンプト変更反映）管理
+#
+#  Why: autoplay と同様、Gradio のジェネレータ関数は inputs を関数呼び出し時に
+#       一度だけ評価する。Generate Forever ループ中に text や caption を変更しても、
+#       ジェネレータ内の引数は最初の値のまま変わらない。
+#       Live Update ON の場合のみ、change イベントでセッション変数を更新し、
+#       ジェネレータのループ内でその最新値を参照する。
+# --------------------------------------------------------------------------- #
+_session_live_update_flags: dict[str, bool] = {}
+_session_live_text: dict[str, str] = {}
+_session_live_caption: dict[str, str] = {}
+
 # 生成した wav を保存するディレクトリ
 _OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "outputs"
 
@@ -343,6 +356,74 @@ _QUEUE_PLAYBACK_JS = f"""
     }};
 }})()
 </script>
+
+<script>
+// --------------------------------------------------------------------------- //
+//  全 <audio> 要素の初期音量を管理し、ユーザーの音量変更を記憶する仕組み
+//
+//  Why: Gradio の gr.Audio コンポーネントには音量を制御するパラメータがない。
+//       HTML5 の <audio> 要素は JavaScript で volume プロパティを設定すれば
+//       音量を変えられるが、Gradio は動的に <audio> 要素を生成・差し替えるため、
+//       MutationObserver で新しい <audio> が追加されるたびに音量を設定する必要がある。
+//       さらに、ユーザーが音量スライダーで変更した値をグローバル変数に記憶し、
+//       次に生成される <audio> 要素にもその音量を引き継ぐ。
+// --------------------------------------------------------------------------- //
+(function() {{
+    'use strict';
+
+    // 初期音量（0.0〜1.0）。0.3 = 30%
+    // ユーザーが音量を変更するとこの値が更新される
+    window._currentVolume = 0.3;
+
+    /**
+     * 指定の <audio> 要素に音量を設定し、音量変更のリスナーを登録する。
+     * すでに設定済みのものには _volumeInitialized フラグで二重設定を防ぐ。
+     */
+    function initAudioVolume(audioEl) {{
+        if (audioEl && !audioEl._volumeInitialized) {{
+            // グローバル変数に記憶された音量を適用
+            audioEl.volume = window._currentVolume;
+            audioEl._volumeInitialized = true;
+
+            // ユーザーが音量スライダーを操作したらグローバル変数を更新
+            // Why: volumechange イベントでユーザーが設定した音量を記憶し、
+            //      次に生成される <audio> 要素にも同じ音量を引き継ぐ。
+            audioEl.addEventListener('volumechange', function() {{
+                window._currentVolume = audioEl.volume;
+            }});
+
+            console.log('[volume-init] set volume to', window._currentVolume, 'for', audioEl.id || 'unnamed audio');
+        }}
+    }}
+
+    // ページ読み込み時に既存の <audio> 要素すべてに音量を設定
+    document.addEventListener('DOMContentLoaded', function() {{
+        document.querySelectorAll('audio').forEach(initAudioVolume);
+    }});
+
+    // MutationObserver: DOM に新しい <audio> が追加されるたびに音量を設定
+    // Why: Gradio は生成のたびに <audio> 要素を動的に差し替えるため、
+    //      初回ロード時だけ設定しても不十分。変更を監視して常に音量を設定する。
+    const observer = new MutationObserver(function(mutations) {{
+        mutations.forEach(function(mutation) {{
+            mutation.addedNodes.forEach(function(node) {{
+                if (node.nodeType === 1) {{
+                    // 追加されたノード自体が <audio> の場合
+                    if (node.tagName === 'AUDIO') {{
+                        initAudioVolume(node);
+                    }}
+                    // 追加されたノードの子孫に <audio> がある場合
+                    node.querySelectorAll && node.querySelectorAll('audio').forEach(initAudioVolume);
+                }}
+            }});
+        }});
+    }});
+    observer.observe(document.body || document.documentElement, {{
+        childList: true,
+        subtree: true
+    }});
+}})()
+</script>
 """
 
 
@@ -436,6 +517,11 @@ def _run_generation(
     # Why: ジェネレータ起動前のチェックボックス状態を保持する
     _session_autoplay_flags[session_id] = autoplay
 
+    # Live Update 用にテキスト/キャプションの初期値をセッション変数に保存
+    # Why: Live Update ON 時にループ内で最新値を参照するための初期値
+    _session_live_text[session_id] = text_value
+    _session_live_caption[session_id] = caption_value
+
     # forever モード開始時にスピナーを表示
     if forever:
         stdout_log(f"[my-gen] Generate Forever started (session: {session_id})")
@@ -489,6 +575,20 @@ def _run_generation(
         stdout_log(
             f"[my-gen] runtime: {'reloaded' if reloaded else 'reused'} (iteration {iteration})"
         )
+
+        # --- Live Update: プロンプトの最新値を取得 ---
+        # Why: Generate Forever ループ中にユーザーが text や caption を変更した場合、
+        #      Live Update ON ならセッション変数から最新値を使用する。
+        #      OFF の場合は Generate Forever 開始時の値がそのまま使われる。
+        if forever and _session_live_update_flags.get(session_id, False):
+            live_text = _session_live_text.get(session_id, text_value)
+            live_caption = _session_live_caption.get(session_id, caption_value)
+            if live_text != text_value or live_caption != caption_value:
+                stdout_log(
+                    f"[my-gen] Live Update: text/caption を最新値に更新 (iteration {iteration})"
+                )
+                text_value = live_text
+                caption_value = live_caption
 
         result = runtime.synthesize(
             SamplingRequest(
@@ -806,6 +906,13 @@ def build_ui() -> gr.Blocks:
             autoplay = gr.Checkbox(
                 label="Autoplay", value=last_settings.get("autoplay", True), scale=1
             )
+            # Live Update: Generate Forever 中にプロンプトの変更を反映するかどうか
+            # Why: デフォルト OFF にすることで、意図しないプロンプト変更が
+            #      連続生成に影響しないようにする。ON にすると、text / caption の
+            #      変更が次のイテレーションから反映される。
+            live_update = gr.Checkbox(
+                label="Live Update", value=False, scale=1
+            )
             cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
 
         # --- Generate Forever 稼働中のスピナー表示 ---
@@ -997,6 +1104,65 @@ def build_ui() -> gr.Blocks:
         autoplay.change(
             fn=_handle_autoplay_change,
             inputs=[autoplay],
+            outputs=[],
+            queue=False,
+        )
+
+        def _handle_live_update_change(value: bool, req: gr.Request):
+            """
+            Live Update チェックボックスの変更をセッション変数に反映する。
+
+            Why: Generate Forever ループ中にプロンプト変更を反映するかどうかを
+                 リアルタイムに切り替えるため。
+            """
+            sid = req.session_hash if req else "default"
+            _session_live_update_flags[sid] = value
+            stdout_msg = "ON" if value else "OFF"
+            print(f"[my-gen] live update changed to {stdout_msg} (session: {sid})", flush=True)
+
+        # Live Update チェックボックスの変更イベント
+        live_update.change(
+            fn=_handle_live_update_change,
+            inputs=[live_update],
+            outputs=[],
+            queue=False,
+        )
+
+        def _handle_text_change(value: str, req: gr.Request):
+            """
+            Text テキストボックスの変更をセッション変数に反映する。
+
+            Why: Live Update ON 時に Generate Forever ループ内から
+                 最新のテキストを参照できるようにするため。
+            """
+            sid = req.session_hash if req else "default"
+            _session_live_text[sid] = str(value).strip()
+
+        # text の変更イベント
+        # Why: queue=False で即座にセッション変数を更新する。
+        #      Live Update OFF でも変数は更新しておき、ON に切り替えた瞬間から
+        #      最新値を参照できるようにする。
+        text.change(
+            fn=_handle_text_change,
+            inputs=[text],
+            outputs=[],
+            queue=False,
+        )
+
+        def _handle_caption_change(value: str, req: gr.Request):
+            """
+            Caption テキストボックスの変更をセッション変数に反映する。
+
+            Why: Live Update ON 時に Generate Forever ループ内から
+                 最新のキャプションを参照できるようにするため。
+            """
+            sid = req.session_hash if req else "default"
+            _session_live_caption[sid] = str(value).strip()
+
+        # caption の変更イベント
+        caption.change(
+            fn=_handle_caption_change,
+            inputs=[caption],
             outputs=[],
             queue=False,
         )
