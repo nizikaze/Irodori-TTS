@@ -757,13 +757,32 @@ def build_ui() -> gr.Blocks:
         # --- 参照音声アップロード ---
         # Why: VoiceDesign版では caption（テキスト）で声質を指定するが、
         #      こちらは実際の音声ファイルをアップロードして声質を指定する。
-        #      参照音声が空の場合は no-reference モードで推論するため、
-        #      必ずしもアップロードしなくてもよい。
-        uploaded_audio = gr.Audio(
-            label="Reference Audio Upload (optional, blank = no-reference mode)",
-            type="filepath",
+        #      ファイル名表示と上書きの利便性のため、Audioコンポーネントではなく
+        #      Fileコンポーネントを使ってファイル名表示と上書きD&Dを両立させる。
+        #      再生確認用に別途 Audio(interactive=False) を設ける。
+        with gr.Row():
+            uploaded_audio = gr.File(
+                label="Reference Audio Upload (Drag & Drop で上書き可能, blank = no-reference mode)",
+                type="filepath",
+                file_types=["audio"],
+                file_count="single",
+                scale=2,
+            )
+            uploaded_audio_player = gr.Audio(
+                label="Reference Audio Playback",
+                type="filepath",
+                interactive=False,
+                scale=2,
+            )
+            
+        def _sync_audio_player(filepath):
+            return filepath
+            
+        uploaded_audio.change(
+            fn=_sync_audio_player,
+            inputs=[uploaded_audio],
+            outputs=[uploaded_audio_player]
         )
-
         # --- サンプリング設定 ---
         # Why: num_candidates は常に1なのでスライダーを削除
         with gr.Accordion("Sampling", open=True):
