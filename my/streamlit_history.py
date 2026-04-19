@@ -357,6 +357,13 @@ for row in rows:
                 unsafe_allow_html=True,
             )
 
+        # ファイル名（DBまたはファイルパスから抽出）
+        filename_display = row.get("filename") or file_path.name
+        st.markdown(
+            f'<div class="gen-caption" style="color: #888;">📁 {filename_display}</div>',
+            unsafe_allow_html=True,
+        )
+
         # --- 音声再生 ---
         if file_path.exists():
             st.audio(str(file_path))
