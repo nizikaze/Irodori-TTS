@@ -858,29 +858,63 @@ def build_ui() -> gr.Blocks:
         #      こちらは実際の音声ファイルをアップロードして声質を指定する。
         #      ファイル名表示と上書きの利便性のため、Audioコンポーネントではなく
         #      Fileコンポーネントを使ってファイル名表示と上書きD&Dを両立させる。
-        #      再生確認用に別途 Audio(interactive=False) を設ける。
-        with gr.Row():
-            uploaded_audio = gr.File(
-                label="Reference Audio Upload (Drag & Drop で上書き可能, blank = no-reference mode)",
-                type="filepath",
-                file_types=["audio"],
-                file_count="single",
-                scale=2,
-            )
+        #      ファイルがすでに読み込まれているとD&Dできない問題を回避するため、
+        #      ドロップゾーンを常に空に保ち、選択されたファイルは別途表示する。
+        with gr.Column():
+            with gr.Row():
+                uploaded_audio_file = gr.File(
+                    label="Reference Audio Upload (ここに音声ファイルをドラッグ&ドロップ)",
+                    type="filepath",
+                    file_types=["audio"],
+                    file_count="single",
+                )
+            
+            with gr.Row():
+                ref_filename_display = gr.Textbox(
+                    label="現在のリファレンス音声",
+                    value="(no-reference mode)",
+                    interactive=False,
+                    scale=3
+                )
+                clear_ref_btn = gr.Button("クリア (No Reference)", variant="stop", scale=1)
+            
             uploaded_audio_player = gr.Audio(
                 label="Reference Audio Playback",
                 type="filepath",
                 interactive=False,
-                scale=2,
             )
             
-        def _sync_audio_player(filepath):
-            return filepath
+        # 内部パス保持用の State コンポーネント。この State が _make_inputs で参照される。
+        uploaded_audio = gr.State(None)
+
+        def _handle_upload(new_file, current_state):
+            # new_file にパスが入っている（ファイルがドロップされた）場合
+            if new_file is not None:
+                from pathlib import Path
+                name = Path(new_file).name
+                # Fileコンポーネントには None を返して常に空のドロップゾーンを維持する
+                return None, new_file, name, new_file
             
-        uploaded_audio.change(
-            fn=_sync_audio_player,
-            inputs=[uploaded_audio],
-            outputs=[uploaded_audio_player]
+            # Fileコンポーネントが空になった場合は現在の状態を維持
+            if current_state is not None:
+                from pathlib import Path
+                return None, current_state, Path(current_state).name, current_state
+                
+            return None, None, "(no-reference mode)", None
+            
+        def _clear_ref():
+            return None, "(no-reference mode)", None
+
+        uploaded_audio_file.change(
+            fn=_handle_upload,
+            inputs=[uploaded_audio_file, uploaded_audio],
+            outputs=[uploaded_audio_file, uploaded_audio, ref_filename_display, uploaded_audio_player]
+        )
+
+        clear_ref_btn.click(
+            fn=_clear_ref,
+            inputs=[],
+            outputs=[uploaded_audio, ref_filename_display, uploaded_audio_player]
         )
         # --- サンプリング設定 ---
         # Why: num_candidates は常に1なのでスライダーを削除
