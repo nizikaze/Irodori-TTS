@@ -359,34 +359,46 @@ _QUEUE_PLAYBACK_JS = f"""
 
 <script>
 // --------------------------------------------------------------------------- //
-//  全 <audio> 要素の初期音量を30%に設定する仕組み
+//  全 <audio> 要素の初期音量を管理し、ユーザーの音量変更を記憶する仕組み
 //
 //  Why: Gradio の gr.Audio コンポーネントには音量を制御するパラメータがない。
 //       HTML5 の <audio> 要素は JavaScript で volume プロパティを設定すれば
 //       音量を変えられるが、Gradio は動的に <audio> 要素を生成・差し替えるため、
 //       MutationObserver で新しい <audio> が追加されるたびに音量を設定する必要がある。
+//       さらに、ユーザーが音量スライダーで変更した値をグローバル変数に記憶し、
+//       次に生成される <audio> 要素にもその音量を引き継ぐ。
 // --------------------------------------------------------------------------- //
 (function() {{
     'use strict';
 
     // 初期音量（0.0〜1.0）。0.3 = 30%
-    const DEFAULT_VOLUME = 0.3;
+    // ユーザーが音量を変更するとこの値が更新される
+    window._currentVolume = 0.3;
 
     /**
-     * 指定の <audio> 要素に初期音量を設定する。
+     * 指定の <audio> 要素に音量を設定し、音量変更のリスナーを登録する。
      * すでに設定済みのものには _volumeInitialized フラグで二重設定を防ぐ。
      */
-    function setDefaultVolume(audioEl) {{
+    function initAudioVolume(audioEl) {{
         if (audioEl && !audioEl._volumeInitialized) {{
-            audioEl.volume = DEFAULT_VOLUME;
+            // グローバル変数に記憶された音量を適用
+            audioEl.volume = window._currentVolume;
             audioEl._volumeInitialized = true;
-            console.log('[volume-init] set volume to', DEFAULT_VOLUME, 'for', audioEl.id || 'unnamed audio');
+
+            // ユーザーが音量スライダーを操作したらグローバル変数を更新
+            // Why: volumechange イベントでユーザーが設定した音量を記憶し、
+            //      次に生成される <audio> 要素にも同じ音量を引き継ぐ。
+            audioEl.addEventListener('volumechange', function() {{
+                window._currentVolume = audioEl.volume;
+            }});
+
+            console.log('[volume-init] set volume to', window._currentVolume, 'for', audioEl.id || 'unnamed audio');
         }}
     }}
 
     // ページ読み込み時に既存の <audio> 要素すべてに音量を設定
     document.addEventListener('DOMContentLoaded', function() {{
-        document.querySelectorAll('audio').forEach(setDefaultVolume);
+        document.querySelectorAll('audio').forEach(initAudioVolume);
     }});
 
     // MutationObserver: DOM に新しい <audio> が追加されるたびに音量を設定
@@ -398,10 +410,10 @@ _QUEUE_PLAYBACK_JS = f"""
                 if (node.nodeType === 1) {{
                     // 追加されたノード自体が <audio> の場合
                     if (node.tagName === 'AUDIO') {{
-                        setDefaultVolume(node);
+                        initAudioVolume(node);
                     }}
                     // 追加されたノードの子孫に <audio> がある場合
-                    node.querySelectorAll && node.querySelectorAll('audio').forEach(setDefaultVolume);
+                    node.querySelectorAll && node.querySelectorAll('audio').forEach(initAudioVolume);
                 }}
             }});
         }});
