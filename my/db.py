@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS generations (
     cfg_guidance_mode TEXT,             -- CFG ガイダンスモード（independent / joint / alternating）
     checkpoint        TEXT,             -- チェックポイントのパスまたは HF repo ID
     file_path         TEXT    NOT NULL, -- 生成された wav ファイルのパス
+    filename          TEXT,             -- 生成された wav ファイルの名前（拡張子含む）
     favorite          INTEGER DEFAULT 0,-- お気に入りフラグ（0=なし, 1=あり）
     rating            INTEGER,          -- レーティング（1〜5, 未評価は NULL）
     note              TEXT              -- ユーザーメモ（自由記述）
@@ -102,6 +103,25 @@ def init_db(db_path: Path | str | None = None) -> Path:
     conn = _get_connection(resolved_path)
     try:
         conn.executescript(_SCHEMA_SQL)
+        
+        # マイグレーション: filename カラムが存在しない場合は追加し、既存データに値を詰める
+        cursor = conn.execute("PRAGMA table_info(generations)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "filename" not in columns:
+            conn.execute("ALTER TABLE generations ADD COLUMN filename TEXT;")
+            
+            # 既存レコードの file_path からファイル名を抽出して filename カラムに反映する
+            rows = conn.execute("SELECT id, file_path FROM generations").fetchall()
+            for row in rows:
+                row_id = row["id"]
+                file_path_str = row["file_path"]
+                # プラットフォームに依存せずスラッシュとバックスラッシュの両方で分割してファイル名を取得
+                fname = file_path_str.replace("\\", "/").split("/")[-1]
+                conn.execute(
+                    "UPDATE generations SET filename = ? WHERE id = ?",
+                    (fname, row_id)
+                )
+
         conn.commit()
     finally:
         conn.close()
@@ -112,6 +132,7 @@ def insert_generation(
     *,
     text: str,
     file_path: str,
+    filename: str | None = None,
     caption: str | None = None,
     seed: int | None = None,
     num_steps: int | None = None,
@@ -131,6 +152,7 @@ def insert_generation(
     Args:
         text:              生成に使ったテキスト（必須）
         file_path:         生成された wav ファイルのパス（必須）
+        filename:          生成された wav ファイルのファイル名
         caption:           スタイルプロンプト（省略可）
         seed:              シード値
         num_steps:         サンプリングステップ数
@@ -155,8 +177,8 @@ def insert_generation(
             INSERT INTO generations
                 (created_at, text, caption, seed, num_steps,
                  cfg_scale_text, cfg_scale_caption, cfg_guidance_mode,
-                 checkpoint, file_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 checkpoint, file_path, filename)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 created_at,
@@ -169,6 +191,7 @@ def insert_generation(
                 cfg_guidance_mode,
                 checkpoint,
                 file_path,
+                filename,
             ),
         )
         conn.commit()
@@ -376,6 +399,7 @@ if __name__ == "__main__":
         cfg_guidance_mode="independent",
         checkpoint="Aratako/Irodori-TTS-500M-v2-VoiceDesign",
         file_path="my/data/test_20260406_190000_42.wav",
+        filename="test_20260406_190000_42.wav",
     )
     print(f"INSERT成功: id={test_id}")
 

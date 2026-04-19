@@ -576,6 +576,7 @@ def _run_generation(
             cfg_guidance_mode=str(cfg_guidance_mode),
             checkpoint=str(checkpoint).strip(),
             file_path=out_path_str,
+            filename=out_filename,
         )
         stdout_log("[my-ref] DB insert 完了")
 
