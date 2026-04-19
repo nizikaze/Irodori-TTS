@@ -863,7 +863,7 @@ def build_ui() -> gr.Blocks:
         with gr.Column():
             with gr.Row():
                 uploaded_audio_file = gr.File(
-                    label="Reference Audio Upload (ここに音声ファイルをドラッグ＆ドロップ)",
+                    label="Reference Audio Upload (ここに音声ファイルをドラッグ&ドロップ)",
                     type="filepath",
                     file_types=["audio"],
                     file_count="single",
