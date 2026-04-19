@@ -105,22 +105,25 @@ def init_db(db_path: Path | str | None = None) -> Path:
         conn.executescript(_SCHEMA_SQL)
         
         # マイグレーション: filename カラムが存在しない場合は追加し、既存データに値を詰める
-        cursor = conn.execute("PRAGMA table_info(generations)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "filename" not in columns:
+        # 競合を防ぐため、ALTER TABLE を try/except で囲む（並行起動時の安全性）
+        try:
             conn.execute("ALTER TABLE generations ADD COLUMN filename TEXT;")
-            
-            # 既存レコードの file_path からファイル名を抽出して filename カラムに反映する
-            rows = conn.execute("SELECT id, file_path FROM generations").fetchall()
-            for row in rows:
-                row_id = row["id"]
-                file_path_str = row["file_path"]
-                # プラットフォームに依存せずスラッシュとバックスラッシュの両方で分割してファイル名を取得
-                fname = file_path_str.replace("\\", "/").split("/")[-1]
-                conn.execute(
-                    "UPDATE generations SET filename = ? WHERE id = ?",
-                    (fname, row_id)
-                )
+        except sqlite3.OperationalError as e:
+            # カラムがすでに存在する場合はエラーを無視して続行
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+        # 既存レコードの file_path からファイル名を抽出して filename カラムに反映する
+        rows = conn.execute("SELECT id, file_path FROM generations").fetchall()
+        for row in rows:
+            row_id = row["id"]
+            file_path_str = row["file_path"]
+            # プラットフォームに依存せずスラッシュとバックスラッシュの両方で分割してファイル名を取得
+            fname = file_path_str.replace("\\", "/").split("/")[-1]
+            conn.execute(
+                "UPDATE generations SET filename = ? WHERE id = ?",
+                (fname, row_id)
+            )
 
         conn.commit()
     finally:
