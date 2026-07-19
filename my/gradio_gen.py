@@ -994,6 +994,17 @@ def build_ui() -> gr.Blocks:
         # --- キュー処理用隠し File ---
         # 生成完了のたびにこのコンポーネントに音声パスが渡され、JS(enqueueAudio)にURL(Token付)が発火する
         queue_new_item = gr.File(visible=False, elem_id="queue-new-item")
+        queue_new_item.change(
+            fn=None,
+            inputs=[queue_new_item],
+            js="""
+            function(fileObj) {
+                if (fileObj && fileObj.url && typeof window.enqueueAudio === 'function') {
+                    window.enqueueAudio(fileObj.url);
+                }
+            }
+            """,
+        )
 
         # --- 直近5件の履歴表示 ---
         # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
