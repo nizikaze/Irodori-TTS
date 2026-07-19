@@ -895,10 +895,70 @@ def build_ui() -> gr.Blocks:
             lines=4,
             value=last_settings.get("caption", ""),
         )
-        ref_wav = gr.Audio(
-            label="Reference Audio Upload (optional, blank = no-reference mode)",
-            type="filepath",
+        
+        # -------------------------------------------------------------------
+        # 3. 参照音声入力欄 & ハンドラー定義
+        # -------------------------------------------------------------------
+        # Why: gr.Audio はドラッグ可能な領域が非常に狭く、操作性が悪いため、
+        #      ドラッグ＆ドロップ領域が広い gr.File を使用する（refの実装と同様）。
+        #      これに伴い、選択されたファイルのファイル名を表示する TextBox、
+        #      参照音声をクリアする Button、再生用の Audio プレイヤーを組み合わせて配置する。
+        with gr.Group():
+            uploaded_audio_file = gr.File(
+                label="Reference Audio Upload (ここに音声ファイルをドラッグ&ドロップ)",
+                type="filepath",
+                file_types=["audio"],
+                file_count="single",
+            )
+            
+            with gr.Row():
+                ref_filename_display = gr.Textbox(
+                    label="現在のリファレンス音声",
+                    value="(no-reference mode)",
+                    interactive=False,
+                    scale=3
+                )
+                clear_ref_btn = gr.Button("クリア (No Reference)", variant="stop", scale=1)
+            
+            uploaded_audio_player = gr.Audio(
+                label="Reference Audio Playback",
+                type="filepath",
+                interactive=False,
+            )
+
+        # 内部パス保持用の State コンポーネント。この State が _make_inputs で参照される。
+        uploaded_audio = gr.State(None)
+
+        def _handle_upload(new_file, current_state):
+            # new_file にパスが入っている（ファイルがドロップされた）場合
+            if new_file is not None:
+                from pathlib import Path
+                name = Path(new_file).name
+                # Fileコンポーネントには None を返して常に空のドロップゾーンを維持する
+                return None, new_file, name, new_file
+            
+            # Fileコンポーネントが空になった場合は現在の状態を維持
+            if current_state is not None:
+                from pathlib import Path
+                return None, current_state, Path(current_state).name, current_state
+                
+            return None, None, "(no-reference mode)", None
+            
+        def _clear_ref():
+            return None, "(no-reference mode)", None
+
+        uploaded_audio_file.change(
+            fn=_handle_upload,
+            inputs=[uploaded_audio_file, uploaded_audio],
+            outputs=[uploaded_audio_file, uploaded_audio, ref_filename_display, uploaded_audio_player]
         )
+
+        clear_ref_btn.click(
+            fn=_clear_ref,
+            inputs=[],
+            outputs=[uploaded_audio, ref_filename_display, uploaded_audio_player]
+        )
+
 
         # -------------------------------------------------------------------
         # 4. キュー再生プレイヤー & 直近の生成結果
@@ -1146,7 +1206,7 @@ def build_ui() -> gr.Blocks:
                 enable_watermark,
                 text,
                 caption,
-                ref_wav,
+                uploaded_audio,
                 num_steps,
                 seed_raw,
                 cfg_guidance_mode,
@@ -1373,7 +1433,7 @@ def build_ui() -> gr.Blocks:
                 s.get("codec_precision", codec_precision_choices[0]),
                 s.get("text", ""),
                 s.get("caption", ""),
-                None, # ref_wav はファイルアップロードなので None 初期化
+                None, # uploaded_audio はファイルアップロードなので None 初期化
                 s.get("num_steps", 40),
                 s.get("seed_raw", ""),
                 s.get("cfg_guidance_mode", "independent"),
@@ -1411,7 +1471,7 @@ def build_ui() -> gr.Blocks:
                 codec_precision,
                 text,
                 caption,
-                ref_wav,
+                uploaded_audio,
                 num_steps,
                 seed_raw,
                 cfg_guidance_mode,
