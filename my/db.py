@@ -111,10 +111,15 @@ def _ensure_column(conn: sqlite3.Connection, table: str, col: str, ddl: str) -> 
 def guess_model_version(checkpoint: str) -> str | None:
     """
     使用したチェックポイント名（パスやハギングフェイスのリポジトリID）から、
-    モデルのバージョン（v2, v2-voicedesign, v3, v3-voicedesignなど）を推定して文字列で返す。
+    モデルのバージョン（v4.1-small, v4-small, v4, v3, v3-voicedesign, v2など）を推定して文字列で返す。
     履歴画面でどのバージョンのモデルで生成されたか判別するために利用する。
     """
     s = str(checkpoint).lower()
+    # v4 / v4.1 系統の判定
+    if "v4.1" in s or "v4_1" in s:
+        return "v4.1-small" if "small" in s else "v4.1"
+    if "v4" in s:
+        return "v4-small" if "small" in s else "v4"
     # v3 の VoiceDesign モデルを優先して判定する
     if "v3-voicedesign" in s or ("v3" in s and ("voicedesign" in s or "voice_design" in s)):
         return "v3-voicedesign"

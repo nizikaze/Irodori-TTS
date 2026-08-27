@@ -51,6 +51,7 @@ from gradio_app import (
     _build_runtime_key,
     _checkpoint_choices,
     _clear_runtime_cache,
+    _coerce_gradio_file_path,
     _default_checkpoint,
     _default_codec_device,
     _default_model_device,
@@ -63,7 +64,7 @@ from gradio_app import (
     _parse_optional_int,
     _parse_optional_str,
     _precision_choices_for_device,
-    _resolve_ref_wav,
+    _resolve_ref_wavs,
     _resolve_speaker_embedding,
 )
 from irodori_tts.inference_runtime import (
@@ -551,9 +552,9 @@ def _run_generation(
     lora_adapter = _parse_optional_str(lora_adapter_raw)
 
     # 参照音声の解決
-    # Why: uploaded_audio が None や空文字の場合は no-reference モードで推論する。
-    #      参照音声がある場合はそのパスを使い、話者の声質を真似て生成する。
-    ref_wav = _resolve_ref_wav(uploaded_audio=uploaded_audio)
+    # Why: uploaded_audio が None や空の場合は no-reference モードで推論する。
+    #      参照音声がある場合はそのパス一覧を使い、話者の声質を真似て生成する（v4では複数クリップ対応）。
+    ref_wavs = _resolve_ref_wavs(uploaded_audio)
 
     # Speaker Embedding の解決
     # Why: 本家で定義されている _resolve_speaker_embedding を用いて、
@@ -564,12 +565,12 @@ def _run_generation(
     )
 
     # 排他チェック
-    # Why: 参照音声(ref_wav)と Speaker Embedding(safetensors) は排他仕様であり、
+    # Why: 参照音声(ref_wavs)と Speaker Embedding(safetensors) は排他仕様であり、
     #      同時に指定された場合はエラーにする。どちらも未指定の場合は no_ref モードとなる。
-    if ref_wav is not None and speaker_embedding is not None:
+    if ref_wavs and speaker_embedding is not None:
         raise ValueError("参照音声と Speaker Embedding は同時に指定できません。")
 
-    no_ref = ref_wav is None and speaker_embedding is None
+    no_ref = not ref_wavs and speaker_embedding is None
 
     # 出力ディレクトリを確保
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -660,7 +661,8 @@ def _run_generation(
         result = runtime.synthesize(
             SamplingRequest(
                 text=text_value,
-                ref_wav=ref_wav,
+                ref_wav=None,
+                ref_wavs=ref_wavs or None,
                 ref_latent=None,
                 ref_embed=speaker_embedding,
                 no_ref=bool(no_ref),
@@ -671,7 +673,7 @@ def _run_generation(
                 # Why: 秒数を自動予測 (Duration Predictor) もしくは手動指定 (manual_seconds) に対応させる。
                 seconds=manual_seconds,
                 duration_scale=float(duration_scale),
-                max_ref_seconds=30.0,
+                max_ref_seconds=None,
                 max_text_len=None,
                 num_steps=int(num_steps),
                 seed=None if seed is None else int(seed),
@@ -732,7 +734,7 @@ def _run_generation(
             sway_coeff=locals().get("sway_coeff"),
             lora_adapter=locals().get("lora_adapter"),
             speaker_embedding=locals().get("speaker_embedding"),
-            ref_wav=Path(ref_wav).name if ref_wav else None,
+            ref_wav=", ".join([Path(p).name for p in ref_wavs]) if ref_wavs else None,
             ui_version=MY_UI_VERSION,
             model_version=guess_model_version(checkpoint),
         )
@@ -856,10 +858,12 @@ def build_ui() -> gr.Blocks:
     #      ただし、ユーザーがローカルの独自チェックポイントを明示的に指定している場合はその設定を維持する。
     saved_checkpoint = last_settings.get("checkpoint", default_checkpoint)
     if saved_checkpoint != default_checkpoint:
-        # 古い公式チェックポイントから最新への移行マップ（500M->600Mパラメータ数変更対応含む）
+        # 古い公式チェックポイントから最新への移行マップ
         _UPGRADE_MAP = {
-            "Aratako/Irodori-TTS-500M-v2": "Aratako/Irodori-TTS-500M-v3",
-            "Aratako/Irodori-TTS-500M-v2-VoiceDesign": "Aratako/Irodori-TTS-600M-v3-VoiceDesign",
+            "Aratako/Irodori-TTS-500M-v2": "Aratako/Irodori-TTS-v4.1-Small",
+            "Aratako/Irodori-TTS-500M-v2-VoiceDesign": "Aratako/Irodori-TTS-v4.1-Small",
+            "Aratako/Irodori-TTS-500M-v3": "Aratako/Irodori-TTS-v4.1-Small",
+            "Aratako/Irodori-TTS-600M-v3-VoiceDesign": "Aratako/Irodori-TTS-v4.1-Small",
         }
         if saved_checkpoint in _UPGRADE_MAP:
             if _UPGRADE_MAP[saved_checkpoint] == default_checkpoint:
@@ -933,27 +937,16 @@ def build_ui() -> gr.Blocks:
         #      比較・確認しやすくする。
         with gr.Row():
             with gr.Column():
-                with gr.Row():
-                    uploaded_audio_file = gr.File(
-                        label="Reference Audio Upload (ここに音声ファイルをドラッグ&ドロップ)",
-                        type="filepath",
-                        file_types=["audio"],
-                        file_count="single",
-                    )
-                
-                with gr.Row():
-                    ref_filename_display = gr.Textbox(
-                        label="現在のリファレンス音声",
-                        value="(no-reference mode)",
-                        interactive=False,
-                        scale=3
-                    )
-                    clear_ref_btn = gr.Button("クリア (No Reference)", variant="stop", scale=1)
-                
-                uploaded_audio_player = gr.Audio(
-                    label="Reference Audio Playback",
+                gr.Markdown(
+                    "**参照音声のヒント (v4-Small):** 同一話者の短くクリーンなクリップを複数アップロードして"
+                    "希望の順序に並び替えることで、より精度の高いクローニングが行えます。"
+                )
+                uploaded_audio = gr.File(
+                    label="Reference Audio Uploads (ドラッグ&ドロップ / 複数可 / 並び替え可)",
                     type="filepath",
-                    interactive=False,
+                    file_types=["audio"],
+                    file_count="multiple",
+                    allow_reordering=True,
                 )
 
             with gr.Column():
@@ -967,39 +960,6 @@ def build_ui() -> gr.Blocks:
                     label="Speaker Embedding Path (optional, alt to upload)",
                     value=last_settings.get("speaker_embedding_path_raw", ""),
                 )
-            
-        # 内部パス保持用の State コンポーネント。この State が _make_inputs で参照される。
-        uploaded_audio = gr.State(None)
-
-        def _handle_upload(new_file, current_state):
-            # new_file にパスが入っている（ファイルがドロップされた）場合
-            if new_file is not None:
-                from pathlib import Path
-                name = Path(new_file).name
-                # Fileコンポーネントには None を返して常に空のドロップゾーンを維持する
-                return None, new_file, name, new_file
-            
-            # Fileコンポーネントが空になった場合は現在の状態を維持
-            if current_state is not None:
-                from pathlib import Path
-                return None, current_state, Path(current_state).name, current_state
-                
-            return None, None, "(no-reference mode)", None
-            
-        def _clear_ref():
-            return None, "(no-reference mode)", None
-
-        uploaded_audio_file.change(
-            fn=_handle_upload,
-            inputs=[uploaded_audio_file, uploaded_audio],
-            outputs=[uploaded_audio_file, uploaded_audio, ref_filename_display, uploaded_audio_player]
-        )
-
-        clear_ref_btn.click(
-            fn=_clear_ref,
-            inputs=[],
-            outputs=[uploaded_audio, ref_filename_display, uploaded_audio_player]
-        )
 
         # -------------------------------------------------------------------
         # 4. キュー再生プレイヤー & 直近の生成結果
@@ -1432,7 +1392,6 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
-                enable_watermark,
             ],
             outputs=[clear_cache_msg],
         )
