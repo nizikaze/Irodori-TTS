@@ -25,6 +25,7 @@ my/
 └── docs/
     ├── fork-workflow.md
     ├── v2_to_v3_changes.md # v2からv3への変更点
+    ├── v3_to_v4_changes.md # v3からv4への変更点
     ├── myui-v1/
     │   ├── spec.md        # v1仕様書
     │   └── TODO.md        # v1実装TODO
@@ -117,7 +118,24 @@ streamlit run my/streamlit_history.py
 * **注意**: `Reference Audio` と `Speaker Embedding` は排他仕様です。同時に両方を指定することはできません。どちらも未指定の場合は自動的に `no_ref` モードでの推論となります。
 
 ### 6. 履歴DB拡張 & 閲覧UI対応
-* DB スキーマが自動的に拡張され、上記の v3 新パラメータ（`duration_scale` / `sway_coeff` / `lora_adapter` / `speaker_embedding` など）のほか、myUI のバージョン、推定されたモデル世代 (`v2` / `v3` / `v2-voicedesign`) も記録されます。
+* DB スキーマが自動的に拡張され、上記の v3 新パラメータ（`duration_scale` / `sway_coeff` / `lora_adapter` / `speaker_embedding` など）のほか、myUI のバージョン、推定されたモデル世代 (`v2` / `v3` / `v4` / `v4.1-small` など) も記録されます。
 * 閲覧UI (Streamlit) の詳細カード内に、これらの追加されたメタ情報が「2段目のメタ情報」として表示されるようになりました。
 * **後方互換性**: 古い myUI で生成された履歴（新カラムが `NULL`）についても、`—` や `auto` といった代替表示で崩れなく読み込める設計になっています。
+
+---
+
+## v4 で追加された新機能・対応
+
+本家の v4 (v4-Small / v4.1-Small) 移行に伴い、独自UIも以下の最新機能に対応しました。詳細は [my/docs/v3_to_v4_changes.md](docs/v3_to_v4_changes.md) を参照してください。
+
+### 1. Irodori-TTS v4.1-Small 統合モデル
+* デフォルトチェックポイントが `Aratako/Irodori-TTS-v4.1-Small` に更新されました。
+* 事前学習済みテキストエンコーダー（Sarashina 2.2-0.5B）の採用により、自然な発音・アクセントで推論されます。
+
+### 2. 複数リファレンスクリップ対応（`gradio_ref.py`）
+* 参照音声アップロードが複数ファイルのドラッグ＆ドロップおよび並び替えに対応しました。
+* 同一話者の複数の短いクリーンなクリップを組み合わせることで、より精度の高い話者クローニングが可能です。
+
+### 3. 量子化モデル（TorchAO）対応
+* `Aratako/Irodori-TTS-v4.1-Small/int8-weight-only` のような量子化サブフォルダ指定による高速・省メモリ推論に対応しています。
 

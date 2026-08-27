@@ -44,6 +44,7 @@ from gradio_app_voicedesign import (
     _build_runtime_key,
     _checkpoint_choices,
     _clear_runtime_cache,
+    _coerce_gradio_file_path,
     _default_checkpoint,
     _default_codec_device,
     _default_model_device,
@@ -56,7 +57,7 @@ from gradio_app_voicedesign import (
     _parse_optional_int,
     _parse_optional_str,
     _precision_choices_for_device,
-    _resolve_ref_wav,
+    _resolve_ref_wavs,
 )
 from irodori_tts.inference_runtime import (
     SamplingRequest,
@@ -608,10 +609,10 @@ def _run_generation(
             f"[my-gen] runtime: {'reloaded' if reloaded else 'reused'} (iteration {iteration})"
         )
 
-        ref_wav_path = _resolve_ref_wav(ref_wav)
-        effective_no_ref = ref_wav_path is None or not runtime.model_cfg.use_speaker_condition_resolved
+        ref_wav_paths = _resolve_ref_wavs(ref_wav)
+        effective_no_ref = not ref_wav_paths or not runtime.model_cfg.use_speaker_condition_resolved
         if effective_no_ref:
-            ref_wav_path = None
+            ref_wav_paths = []
 
         # --- Live Update: プロンプトの最新値を取得 ---
         # Why: Generate Forever ループ中にユーザーが text や caption を変更した場合、
@@ -631,7 +632,8 @@ def _run_generation(
             SamplingRequest(
                 text=text_value,
                 caption=caption_value or None,
-                ref_wav=ref_wav_path,
+                ref_wav=None,
+                ref_wavs=ref_wav_paths or None,
                 ref_latent=None,
                 no_ref=effective_no_ref,
                 ref_normalize_db=-16.0,
@@ -641,7 +643,7 @@ def _run_generation(
                 # Why: 秒数を自動予測 (Duration Predictor) もしくは手動指定 (manual_seconds) に対応させる。
                 seconds=manual_seconds,
                 duration_scale=float(duration_scale),
-                max_ref_seconds=30.0,
+                max_ref_seconds=None,
                 max_text_len=max_text_len,
                 max_caption_len=max_caption_len,
                 num_steps=int(num_steps),
@@ -704,7 +706,7 @@ def _run_generation(
             t_schedule_mode=locals().get("t_schedule_mode"),
             sway_coeff=locals().get("sway_coeff"),
             lora_adapter=locals().get("lora_adapter"),
-            ref_wav=Path(ref_wav_path).name if ref_wav_path else None,
+            ref_wav=", ".join([Path(p).name for p in ref_wav_paths]) if ref_wav_paths else None,
             cfg_scale_speaker=locals().get("cfg_scale_speaker"),
             ui_version=MY_UI_VERSION,
             model_version=guess_model_version(checkpoint),
@@ -823,10 +825,12 @@ def build_ui() -> gr.Blocks:
     #      ただし、ユーザーがローカルの独自チェックポイントを明示的に指定している場合はその設定を維持する。
     saved_checkpoint = last_settings.get("checkpoint", default_checkpoint)
     if saved_checkpoint != default_checkpoint:
-        # 古い公式チェックポイントから最新への移行マップ（500M->600Mパラメータ数変更対応含む）
+        # 古い公式チェックポイントから最新への移行マップ
         _UPGRADE_MAP = {
-            "Aratako/Irodori-TTS-500M-v2": "Aratako/Irodori-TTS-500M-v3",
-            "Aratako/Irodori-TTS-500M-v2-VoiceDesign": "Aratako/Irodori-TTS-600M-v3-VoiceDesign",
+            "Aratako/Irodori-TTS-500M-v2": "Aratako/Irodori-TTS-v4.1-Small",
+            "Aratako/Irodori-TTS-500M-v2-VoiceDesign": "Aratako/Irodori-TTS-v4.1-Small",
+            "Aratako/Irodori-TTS-500M-v3": "Aratako/Irodori-TTS-v4.1-Small",
+            "Aratako/Irodori-TTS-600M-v3-VoiceDesign": "Aratako/Irodori-TTS-v4.1-Small",
         }
         if saved_checkpoint in _UPGRADE_MAP:
             if _UPGRADE_MAP[saved_checkpoint] == default_checkpoint:
@@ -1399,7 +1403,6 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
-                enable_watermark,
             ],
             outputs=[clear_cache_msg],
         )
