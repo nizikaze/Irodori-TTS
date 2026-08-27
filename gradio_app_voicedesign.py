@@ -64,6 +64,17 @@ def _checkpoint_choices() -> list[str]:
     choices = [str(p) for p in candidates]
 
     official_repos = [
+        "Aratako/Irodori-TTS-v4.1-Small",
+        "Aratako/Irodori-TTS-v4.1-Small-Quantized/int8-weight-only",
+        "Aratako/Irodori-TTS-v4.1-Small-Quantized/int4-weight-only",
+        "Aratako/Irodori-TTS-v4.1-Small-Quantized/float8-weight-only",
+        "Aratako/Irodori-TTS-v4.1-Small-Quantized/int8-dynamic-activation-int8-weight",
+        "Aratako/Irodori-TTS-v4-Small",
+        "Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only",
+        "Aratako/Irodori-TTS-v4-Small-Quantized/int4-weight-only",
+        "Aratako/Irodori-TTS-v4-Small-Quantized/float8-weight-only",
+        "Aratako/Irodori-TTS-v4-Small-Quantized/int8-dynamic-activation-int8-weight",
+        "Aratako/Irodori-TTS-600M-v3-VoiceDesign",
         "Aratako/Irodori-TTS-500M-v2-VoiceDesign",
     ]
     for repo in official_repos:

@@ -101,3 +101,5 @@ uv run python quantize_checkpoint.py \
    - 複数リファレンス音声指定時も `ref_wav` カラムへ安全にファイル名一覧を格納するように対応。
 5. **Streamlit 履歴閲覧**:
    - `my/streamlit_history.py` における `v4` 系モデルバッジの表示とメタデータ表示に対応。
+6. **モデル選択肢（Checkpoint）の更新**:
+   - `_checkpoint_choices` の公式リポジトリ一覧に `Aratako/Irodori-TTS-v4.1-Small`、`Aratako/Irodori-TTS-v4-Small`、および各種 TorchAO 量子化モデル（`int8-weight-only`, `int4-weight-only`, `float8-weight-only`, `int8-dynamic-activation-int8-weight`）を追加し、UIのドロップダウンから直接選択可能に対応。
